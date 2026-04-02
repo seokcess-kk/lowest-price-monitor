@@ -1,37 +1,19 @@
 import type { Page } from 'playwright';
 import { parsePrice, ELEMENT_WAIT_TIMEOUT, PAGE_LOAD_TIMEOUT } from '../utils';
 
-/** ScrapeResult 인터페이스 */
 export interface ScrapeResult {
   price: number;
   storeName: string | null;
 }
 
-/** 다나와 가격비교 가격 셀렉터 (폴백 순서) */
-const DANAWA_PRICE_SELECTORS = [
-  // 최저가 리스트 영역
-  '.lowest_List .lowest_top .prc_c',
-  '.lowest_List .row:first-child .prc_c',
-  // 가격비교 테이블
-  '.diff_item:first-child .prc_t',
-  '.prod_pricelist .prc_c',
-  // 일반 최저가 표시
-  '.lowest_price .prc_c',
-  '.summary_info .prc_t',
-] as const;
-
-/** 다나와 스토어명 셀렉터 (폴백 순서) */
-const DANAWA_STORE_SELECTORS = [
-  '.lowest_List .lowest_top .mall_name',
-  '.lowest_List .row:first-child .mall_name',
-  '.diff_item:first-child .mall_name',
-  '.prod_pricelist .mall_name',
-  '.lowest_price .mall_name',
-] as const;
-
 /**
  * 다나와 가격비교 페이지에서 최저가를 수집한다.
- * - 가격비교 테이블에서 최저가 행의 가격 + 스토어명 추출
+ *
+ * 실제 다나와 페이지 구조 (2024~):
+ * - 상단 최저가: a.link__sell-price 또는 div.sell-price (예: "16,470원")
+ * - 가격비교 리스트: .diff_item 각 행
+ *   - 가격: .prc_c (예: "16,470")
+ *   - 스토어: .diff_item img의 alt 속성 (예: "쿠팡", "G마켓")
  */
 export async function scrapeDanawa(
   url: string,
@@ -43,53 +25,95 @@ export async function scrapeDanawa(
       timeout: PAGE_LOAD_TIMEOUT,
     });
 
-    let price: number | null = null;
+    // 가격비교 영역이 동적 로드되므로 대기
+    await page.waitForTimeout(3000);
 
-    // 가격 추출
-    for (const selector of DANAWA_PRICE_SELECTORS) {
-      try {
-        const element = await page.waitForSelector(selector, {
-          timeout: ELEMENT_WAIT_TIMEOUT,
-        });
+    // 방법 1: 상단 최저가 영역에서 추출
+    const topPrice = await extractTopPrice(page);
+    if (topPrice) return topPrice;
 
-        if (element) {
-          const text = await element.textContent();
-          if (text) {
-            price = parsePrice(text);
-            if (price !== null) break;
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
+    // 방법 2: 가격비교 리스트 첫 번째 행에서 추출
+    const listPrice = await extractListPrice(page);
+    if (listPrice) return listPrice;
 
-    if (price === null) {
-      console.warn(`[danawa] 가격 요소를 찾을 수 없음: ${url}`);
-      return null;
-    }
+    // 페이지 상태 진단
+    const diagnosis = await page.evaluate(() => {
+      const title = document.title;
+      const body = document.body.innerText.substring(0, 200);
+      const hasDiffItem = !!document.querySelector('.diff_item');
+      const hasSellPrice = !!document.querySelector('.sell-price');
+      return { title, body, hasDiffItem, hasSellPrice };
+    });
 
-    // 스토어명 추출 (실패해도 가격은 반환)
-    let storeName: string | null = null;
-    for (const selector of DANAWA_STORE_SELECTORS) {
-      try {
-        const element = await page.$(selector);
-        if (element) {
-          const text = await element.textContent();
-          if (text && text.trim().length > 0) {
-            storeName = text.trim();
-            break;
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    return { price, storeName };
+    console.warn(`[danawa] 가격 추출 실패 - 진단: ${JSON.stringify(diagnosis)}`);
+    return null;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[danawa] 스크래핑 실패: ${url} - ${message}`);
+    return null;
+  }
+}
+
+/** 상단 최저가 영역에서 가격 + 스토어명 추출 */
+async function extractTopPrice(page: Page): Promise<ScrapeResult | null> {
+  const selectors = ['a.link__sell-price', 'div.sell-price'];
+
+  for (const selector of selectors) {
+    try {
+      const el = await page.waitForSelector(selector, { timeout: ELEMENT_WAIT_TIMEOUT });
+      if (!el) continue;
+
+      const text = await el.textContent();
+      if (!text) continue;
+
+      const price = parsePrice(text);
+      if (price === null) continue;
+
+      // 상단 영역의 스토어명: 첫 번째 diff_item의 이미지 alt
+      let storeName: string | null = null;
+      try {
+        const mallImg = await page.$('.diff_item:first-child .d_mall img');
+        if (mallImg) {
+          storeName = await mallImg.getAttribute('alt');
+        }
+      } catch { /* 스토어명 실패는 무시 */ }
+
+      return { price, storeName };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+/** 가격비교 리스트 첫 번째 행에서 가격 + 스토어명 추출 */
+async function extractListPrice(page: Page): Promise<ScrapeResult | null> {
+  try {
+    const firstItem = await page.$('.diff_item:first-child');
+    if (!firstItem) return null;
+
+    // 가격
+    const priceEl = await firstItem.$('.prc_c');
+    if (!priceEl) return null;
+
+    const priceText = await priceEl.textContent();
+    if (!priceText) return null;
+
+    const price = parsePrice(priceText);
+    if (price === null) return null;
+
+    // 스토어명 (이미지 alt)
+    let storeName: string | null = null;
+    try {
+      const mallImg = await firstItem.$('.d_mall img');
+      if (mallImg) {
+        storeName = await mallImg.getAttribute('alt');
+      }
+    } catch { /* 무시 */ }
+
+    return { price, storeName };
+  } catch {
     return null;
   }
 }

@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { href: '/', label: '메인' },
   { href: '/products/manage', label: '상품 관리' },
   { href: '/export', label: 'Export' },
+  { href: '/errors', label: '에러 로그' },
 ];
 
 export default function Navigation() {
