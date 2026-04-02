@@ -83,7 +83,8 @@ export async function collectAll(
   const context = await browser.newContext(BROWSER_CONTEXT_OPTIONS);
 
   try {
-    const channels: Channel[] = ['coupang', 'naver', 'danawa'];
+    // 다나와(Playwright) 먼저, API 채널은 나중에 (rate limit 대응)
+    const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
     for (const product of products as Product[]) {
       for (const channel of channels) {
