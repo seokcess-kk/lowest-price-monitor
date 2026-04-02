@@ -1,5 +1,5 @@
 import type { Page } from 'playwright';
-import { parsePrice, ELEMENT_WAIT_TIMEOUT, PAGE_LOAD_TIMEOUT } from '../utils';
+import crypto from 'crypto';
 
 export interface ScrapeResult {
   price: number;
@@ -7,85 +7,96 @@ export interface ScrapeResult {
 }
 
 /**
- * 쿠팡 상품 페이지에서 가격을 수집한다.
- * - store_name은 항상 null (쿠팡 직접 판매)
- * - 쿠팡은 봇 차단이 강력하므로, 차단 시 구체적 에러 메시지를 반환
+ * 쿠팡 파트너스 API를 사용하여 상품 가격을 조회한다.
+ * 상품명으로 검색하여 가격을 가져온다.
+ * store_name은 항상 null (쿠팡 직접 판매)
  */
 export async function scrapeCoupang(
   url: string,
-  page: Page
+  _page: Page,
+  productName?: string
 ): Promise<ScrapeResult | null> {
-  try {
-    // webdriver 탐지 우회
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      // @ts-ignore
-      window.chrome = { runtime: {} };
-    });
+  const accessKey = process.env.COUPANG_ACCESS_KEY;
+  const secretKey = process.env.COUPANG_SECRET_KEY;
 
-    const response = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: PAGE_LOAD_TIMEOUT,
-    });
-
-    // HTTP 상태 코드 확인
-    const status = response?.status();
-    if (status === 403 || status === 401) {
-      throw new Error(`쿠팡 접근 차단 (HTTP ${status}) - IP가 차단되었을 수 있습니다`);
-    }
-
-    // Access Denied 페이지 감지
-    const title = await page.title();
-    if (title.includes('Access Denied')) {
-      throw new Error('쿠팡 Access Denied - IP 차단됨. 다른 네트워크에서 시도하거나 시간을 두고 재시도하세요');
-    }
-
-    // 가격 요소 대기
-    await page.waitForTimeout(2000);
-
-    // 가격 셀렉터 시도
-    const priceSelectors = [
-      '.prod-sale-price .total-price strong',
-      '.prod-buy-header .total-price strong',
-      '.prod-price .total-price strong',
-      '.prod-coupon-price .total-price',
-      '.total-price strong',
-      '.prod-sale-price',
-    ];
-
-    for (const selector of priceSelectors) {
-      try {
-        const element = await page.waitForSelector(selector, {
-          timeout: ELEMENT_WAIT_TIMEOUT,
-        });
-        if (!element) continue;
-
-        const text = await element.textContent();
-        if (!text) continue;
-
-        const price = parsePrice(text);
-        if (price !== null) {
-          return { price, storeName: null };
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    // 셀렉터로 못 찾은 경우 페이지 텍스트에서 가격 패턴 시도
-    const bodyText = await page.evaluate(() => document.body.innerText);
-    const priceMatch = bodyText.match(/(\d{1,3}(,\d{3})+)\s*원/);
-    if (priceMatch) {
-      const price = parsePrice(priceMatch[0]);
-      if (price !== null) {
-        return { price, storeName: null };
-      }
-    }
-
-    throw new Error(`가격 요소를 찾을 수 없음 (페이지 타이틀: ${title})`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[coupang] ${url} - ${message}`);
-    throw new Error(`[쿠팡] ${message}`);
+  if (!accessKey || !secretKey) {
+    throw new Error('COUPANG_ACCESS_KEY 또는 COUPANG_SECRET_KEY가 설정되지 않았습니다');
   }
+
+  if (!productName) {
+    throw new Error('쿠팡 API 검색에는 상품명이 필요합니다');
+  }
+
+  const apiPath = `/v2/providers/affiliate_open_api/apis/openapi/products/search?keyword=${encodeURIComponent(productName)}&limit=5`;
+  const auth = generateCoupangHmac('GET', apiPath, accessKey, secretKey);
+  const apiUrl = `https://api-gateway.coupang.com${apiPath}`;
+
+  const res = await fetch(apiUrl, {
+    headers: { 'Authorization': auth },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`쿠팡 API 실패 (${res.status}): ${text.substring(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const products = data?.data?.productData;
+
+  if (!products || products.length === 0) {
+    throw new Error(`쿠팡 API 검색 결과 없음: "${productName}"`);
+  }
+
+  // URL에서 상품 ID 추출하여 일치하는 항목 찾기
+  const productId = extractProductId(url);
+  const match = productId
+    ? products.find((p: { productId: number }) => String(p.productId) === productId)
+    : null;
+
+  // 일치하는 상품이 있으면 사용, 없으면 최저가 상품 사용
+  const selected = match || products[0];
+  const price = Math.round(selected.productPrice);
+
+  if (!price || price <= 0) {
+    throw new Error('쿠팡 API 가격 데이터 없음');
+  }
+
+  return { price, storeName: null };
+}
+
+/** URL에서 쿠팡 상품 ID 추출 */
+function extractProductId(url: string): string | null {
+  const match = url.match(/products\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+/** 쿠팡 파트너스 API HMAC 서명 생성 */
+function generateCoupangHmac(
+  method: string,
+  urlPath: string,
+  accessKey: string,
+  secretKey: string
+): string {
+  const [path, ...queryParts] = urlPath.split('?');
+  const query = queryParts.length > 0 ? queryParts.join('?') : '';
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datetime =
+    String(now.getUTCFullYear()).slice(2) +
+    pad(now.getUTCMonth() + 1) +
+    pad(now.getUTCDate()) +
+    'T' +
+    pad(now.getUTCHours()) +
+    pad(now.getUTCMinutes()) +
+    pad(now.getUTCSeconds()) +
+    'Z';
+
+  const message = datetime + method + path + query;
+  const signature = crypto
+    .createHmac('sha256', secretKey)
+    .update(message)
+    .digest('hex');
+
+  return `CEA algorithm=HmacSHA256, access-key=${accessKey}, signed-date=${datetime}, signature=${signature}`;
 }

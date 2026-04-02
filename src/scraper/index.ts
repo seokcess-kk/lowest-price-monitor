@@ -12,10 +12,10 @@ interface ScrapeResult {
   storeName: string | null;
 }
 
-/** 채널별 스크래퍼 매핑 */
+/** 채널별 스크래퍼 매핑 (productName은 API 기반 채널에서 사용) */
 const CHANNEL_SCRAPERS: Record<
   Channel,
-  (url: string, page: Page) => Promise<ScrapeResult | null>
+  (url: string, page: Page, productName?: string) => Promise<ScrapeResult | null>
 > = {
   coupang: scrapeCoupang,
   naver: scrapeNaver,
@@ -102,7 +102,7 @@ export async function collectAll(
             console.log(`[${channel}] ${product.name} 수집 중...`);
 
             const scraper = CHANNEL_SCRAPERS[channel];
-            const scrapeResult = await scraper(url, page);
+            const scrapeResult = await scraper(url, page, product.name);
 
             if (scrapeResult) {
               result.success = true;
