@@ -1,4 +1,5 @@
 import type { Page } from 'playwright';
+import { parsePrice, PAGE_LOAD_TIMEOUT } from '../utils';
 
 export interface ScrapeResult {
   price: number;
@@ -6,55 +7,162 @@ export interface ScrapeResult {
 }
 
 /**
- * 네이버 쇼핑 검색 API를 사용하여 최저가를 조회한다.
- * 상품명으로 검색하여 최저가 + 판매처를 가져온다.
+ * 네이버 쇼핑 가격비교 페이지에서 최저가를 수집한다.
+ * 1. Playwright로 카탈로그 페이지 직접 접근 (정확)
+ * 2. 차단 시 네이버 쇼핑 검색 API 폴백 (부정확 가능)
  */
 export async function scrapeNaver(
   url: string,
-  _page: Page,
+  page: Page,
   productName?: string
 ): Promise<ScrapeResult | null> {
+  // 방법 1: Playwright로 직접 접근
+  const directResult = await tryPlaywright(url, page);
+  if (directResult) return directResult;
+
+  // 방법 2: API 폴백
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
 
-  if (!clientId || !clientSecret) {
-    throw new Error('NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET이 설정되지 않았습니다');
+  if (clientId && clientSecret && productName) {
+    const apiResult = await trySearchApi(productName, clientId, clientSecret);
+    if (apiResult) {
+      console.log('[naver] API 폴백 사용 (Playwright 차단됨)');
+      return apiResult;
+    }
   }
 
-  if (!productName) {
-    throw new Error('네이버 API 검색에는 상품명이 필요합니다');
+  throw new Error('네이버 쇼핑 접근 차단됨 - Playwright/API 모두 실패');
+}
+
+/** Playwright로 카탈로그 페이지 직접 접근 */
+async function tryPlaywright(url: string, page: Page): Promise<ScrapeResult | null> {
+  try {
+    await page.goto(url, {
+      waitUntil: 'networkidle',
+      timeout: PAGE_LOAD_TIMEOUT,
+    });
+    await page.waitForTimeout(5000);
+
+    // 차단 페이지 감지
+    const bodyText = await page.evaluate(() => document.body.innerText);
+    if (bodyText.includes('접속이 일시적으로 제한')) {
+      console.warn('[naver] Playwright 접속 제한 감지');
+      return null;
+    }
+
+    // 가격 추출 시도 — 네이버 SPA 클래스 (변동 잦음)
+    let price: number | null = null;
+    let storeName: string | null = null;
+
+    // 텍스트에서 최저가 패턴 추출
+    const priceData = await page.evaluate(() => {
+      const body = document.body.innerText;
+
+      // "최저 XX,XXX원" 패턴
+      const lowestMatch = body.match(/최저\s*(\d{1,3}(,\d{3})+)\s*원/);
+      if (lowestMatch) {
+        return { priceText: lowestMatch[1] + '원', storeName: null };
+      }
+
+      // 가격비교 영역의 첫 번째 가격
+      const priceMatches = body.match(/(\d{1,3}(,\d{3})+)\s*원/g);
+      if (priceMatches && priceMatches.length > 0) {
+        return { priceText: priceMatches[0], storeName: null };
+      }
+
+      return null;
+    });
+
+    if (priceData) {
+      price = parsePrice(priceData.priceText);
+      storeName = priceData.storeName;
+    }
+
+    // 셀렉터 기반 추출 시도
+    if (price === null) {
+      const selectors = [
+        '[class*="lowestPrice"] [class*="num"]',
+        '[class*="price_area"] [class*="price"]',
+        '[class*="lowest"] [class*="price"]',
+      ];
+
+      for (const sel of selectors) {
+        try {
+          const el = await page.$(sel);
+          if (!el) continue;
+          const text = await el.textContent();
+          if (!text) continue;
+          price = parsePrice(text);
+          if (price !== null) break;
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    if (price === null) return null;
+
+    // 스토어명 추출
+    if (!storeName) {
+      const storeSelectors = [
+        '[class*="mall_name"]',
+        '[class*="store"]',
+        '[class*="seller"]',
+      ];
+      for (const sel of storeSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (!el) continue;
+          const text = await el.textContent();
+          if (text?.trim()) {
+            storeName = text.trim();
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    return { price, storeName };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.warn(`[naver] Playwright 실패: ${msg}`);
+    return null;
   }
+}
 
-  const apiUrl = `https://openapi.naver.com/v1/search/shop.json?query=${encodeURIComponent(productName)}&display=5&sort=asc&exclude=used`;
+/** 네이버 쇼핑 검색 API 폴백 */
+async function trySearchApi(
+  productName: string,
+  clientId: string,
+  clientSecret: string
+): Promise<ScrapeResult | null> {
+  try {
+    const apiUrl = `https://openapi.naver.com/v1/search/shop.json?query=${encodeURIComponent(productName)}&display=5&sort=asc&exclude=used`;
 
-  const res = await fetch(apiUrl, {
-    headers: {
-      'X-Naver-Client-Id': clientId,
-      'X-Naver-Client-Secret': clientSecret,
-    },
-  });
+    const res = await fetch(apiUrl, {
+      headers: {
+        'X-Naver-Client-Id': clientId,
+        'X-Naver-Client-Secret': clientSecret,
+      },
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`네이버 API 실패 (${res.status}): ${text.substring(0, 200)}`);
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (!data.items || data.items.length === 0) return null;
+
+    const item = data.items[0];
+    const price = parseInt(item.lprice, 10);
+    if (!price || price <= 0) return null;
+
+    return {
+      price,
+      storeName: item.mallName || null,
+    };
+  } catch {
+    return null;
   }
-
-  const data = await res.json();
-
-  if (!data.items || data.items.length === 0) {
-    throw new Error(`네이버 API 검색 결과 없음: "${productName}"`);
-  }
-
-  // 최저가 항목 (sort=asc로 이미 가격 오름차순)
-  const item = data.items[0];
-  const price = parseInt(item.lprice, 10);
-
-  if (!price || price <= 0) {
-    throw new Error('네이버 API 가격 데이터 없음');
-  }
-
-  return {
-    price,
-    storeName: item.mallName || null,
-  };
 }
