@@ -37,15 +37,19 @@ const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /**
- * Playwright chromium 헤드리스 브라우저를 생성한다.
+ * Playwright 브라우저를 생성한다.
+ * - channel: 'chrome' → 설치된 실제 Chrome 사용 (핑거프린트 정상화)
+ * - AutomationControlled 플래그 비활성화 → navigator.webdriver 탐지 우회
  */
 export async function createBrowser(): Promise<Browser> {
   const browser = await chromium.launch({
+    channel: 'chrome',
     headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
     ],
   });
   return browser;

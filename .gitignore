@@ -42,3 +42,5 @@ next-env.d.ts
 
 # workspace
 _workspace/
+
+.vercel
