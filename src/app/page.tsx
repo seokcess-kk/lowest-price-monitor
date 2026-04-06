@@ -44,13 +44,21 @@ export default function Home() {
     setIsRunning(false);
   };
 
-  // 예상 시간 초과 시 자동 종료
+  // 수집 중 30초마다 자동 새로고침 (가격 갱신 감지)
+  useEffect(() => {
+    if (isRunning && elapsed > 0 && elapsed % 30 === 0) {
+      refetch();
+    }
+  }, [elapsed, isRunning, refetch]);
+
+  // 예상 시간 초과 시 자동 종료 + 최종 새로고침
   useEffect(() => {
     if (isRunning && elapsed >= estimatedSeconds) {
       stopTimer();
-      setCollectMsg('수집이 완료되었을 수 있습니다. 새로고침을 눌러 확인하세요.');
+      refetch();
+      setCollectMsg('수집이 완료되었습니다.');
     }
-  }, [elapsed, estimatedSeconds, isRunning]);
+  }, [elapsed, estimatedSeconds, isRunning, refetch]);
 
   // 컴포넌트 언마운트 시 타이머 정리
   useEffect(() => {

@@ -49,6 +49,11 @@ export default function ManageProductsPage() {
     refetch();
   };
 
+  const truncateUrl = (url: string, maxLen = 40) => {
+    if (url.length <= maxLen) return url;
+    return url.slice(0, maxLen) + '...';
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">상품 관리</h1>
@@ -74,85 +79,101 @@ export default function ManageProductsPage() {
         {error && <div className="text-center py-8 text-red-500">오류: {error}</div>}
 
         {!loading && !error && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-b">
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">상품명</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">상태</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">쿠팡</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">네이버</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">다나와</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">관리</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((product) => (
-                  <tr key={product.id} className="border-b hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium">{product.name}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span
-                        className={`inline-block px-2 py-1 text-xs rounded-full ${
-                          product.is_active
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-gray-100 text-gray-500'
-                        }`}
+          <div className="divide-y">
+            {products.map((product) => (
+              <div key={product.id} className="px-4 py-4 hover:bg-gray-50">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3">
+                    <span className="font-semibold text-gray-900">{product.name}</span>
+                    <span
+                      className={`inline-block px-2 py-0.5 text-xs rounded-full ${
+                        product.is_active
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {product.is_active ? '활성' : '비활성'}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setEditingProduct(product)}
+                      className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
+                    >
+                      수정
+                    </button>
+                    <button
+                      onClick={() => handleToggle(product.id)}
+                      className={`px-3 py-1 text-sm rounded ${
+                        product.is_active
+                          ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                          : 'bg-green-50 text-green-600 hover:bg-green-100'
+                      }`}
+                    >
+                      {product.is_active ? '비활성화' : '활성화'}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: '#E44232' }} />
+                    <span className="text-gray-500 w-10 flex-shrink-0">쿠팡</span>
+                    {product.coupang_url ? (
+                      <a
+                        href={product.coupang_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-700 hover:text-blue-600 hover:underline truncate"
+                        title={product.coupang_url}
                       >
-                        {product.is_active ? '활성' : '비활성'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center text-sm">
-                      {product.coupang_url ? (
-                        <span className="text-green-600">O</span>
-                      ) : (
-                        <span className="text-gray-300">-</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center text-sm">
-                      {product.naver_url ? (
-                        <span className="text-green-600">O</span>
-                      ) : (
-                        <span className="text-gray-300">-</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center text-sm">
-                      {product.danawa_url ? (
-                        <span className="text-green-600">O</span>
-                      ) : (
-                        <span className="text-gray-300">-</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <div className="flex justify-center gap-2">
-                        <button
-                          onClick={() => setEditingProduct(product)}
-                          className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200"
-                        >
-                          수정
-                        </button>
-                        <button
-                          onClick={() => handleToggle(product.id)}
-                          className={`px-3 py-1 text-sm rounded ${
-                            product.is_active
-                              ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                              : 'bg-green-50 text-green-600 hover:bg-green-100'
-                          }`}
-                        >
-                          {product.is_active ? '비활성화' : '활성화'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {products.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
-                      등록된 상품이 없습니다.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                        {truncateUrl(product.coupang_url)}
+                      </a>
+                    ) : (
+                      <span className="text-gray-300">미등록</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: '#03C75A' }} />
+                    <span className="text-gray-500 w-10 flex-shrink-0">네이버</span>
+                    {product.naver_url ? (
+                      <a
+                        href={product.naver_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-700 hover:text-blue-600 hover:underline truncate"
+                        title={product.naver_url}
+                      >
+                        {truncateUrl(product.naver_url)}
+                      </a>
+                    ) : (
+                      <span className="text-gray-300">미등록</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: '#0068B7' }} />
+                    <span className="text-gray-500 w-10 flex-shrink-0">다나와</span>
+                    {product.danawa_url ? (
+                      <a
+                        href={product.danawa_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-700 hover:text-blue-600 hover:underline truncate"
+                        title={product.danawa_url}
+                      >
+                        {truncateUrl(product.danawa_url)}
+                      </a>
+                    ) : (
+                      <span className="text-gray-300">미등록</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {products.length === 0 && (
+              <div className="px-4 py-8 text-center text-gray-400">
+                등록된 상품이 없습니다.
+              </div>
+            )}
           </div>
         )}
       </div>

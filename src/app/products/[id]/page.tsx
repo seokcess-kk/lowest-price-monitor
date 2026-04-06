@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { usePriceHistory } from '@/hooks/usePriceHistory';
 import PriceChart from '@/components/PriceChart';
+import type { Channel } from '@/types/database';
 
 type Period = '7d' | '30d' | '90d' | 'all';
 
@@ -12,6 +13,18 @@ const PERIOD_LABELS: Record<Period, string> = {
   '30d': '30일',
   '90d': '90일',
   all: '전체',
+};
+
+const CHANNEL_LABELS: Record<Channel, string> = {
+  coupang: '쿠팡',
+  naver: '네이버',
+  danawa: '다나와',
+};
+
+const CHANNEL_STYLES: Record<Channel, { bg: string; text: string; dot: string }> = {
+  coupang: { bg: 'bg-red-50', text: 'text-red-700', dot: '#E44232' },
+  naver: { bg: 'bg-green-50', text: 'text-green-700', dot: '#03C75A' },
+  danawa: { bg: 'bg-blue-50', text: 'text-blue-700', dot: '#0068B7' },
 };
 
 function getStartDate(period: Period): string | undefined {
@@ -78,20 +91,28 @@ export default function ProductDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.slice(0, 50).map((log) => (
-                    <tr key={log.id} className="border-b hover:bg-gray-50">
-                      <td className="px-4 py-2 text-sm text-gray-600">
-                        {new Date(log.collected_at).toLocaleString('ko-KR')}
-                      </td>
-                      <td className="px-4 py-2 text-sm">{log.channel}</td>
-                      <td className="px-4 py-2 text-sm text-right font-medium">
-                        {log.price.toLocaleString('ko-KR')}원
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-500">
-                        {log.store_name || '-'}
-                      </td>
-                    </tr>
-                  ))}
+                  {data.slice(0, 50).map((log) => {
+                    const style = CHANNEL_STYLES[log.channel];
+                    return (
+                      <tr key={log.id} className="border-b hover:bg-gray-50">
+                        <td className="px-4 py-2 text-sm text-gray-600">
+                          {new Date(log.collected_at).toLocaleString('ko-KR')}
+                        </td>
+                        <td className="px-4 py-2 text-sm">
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${style.bg} ${style.text}`}>
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: style.dot }} />
+                            {CHANNEL_LABELS[log.channel]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right font-semibold text-gray-900">
+                          {log.price.toLocaleString('ko-KR')}원
+                        </td>
+                        <td className="px-4 py-2 text-sm text-gray-500">
+                          {log.store_name || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {data.length === 0 && (
                     <tr>
                       <td colSpan={4} className="px-4 py-8 text-center text-gray-400">

@@ -47,44 +47,47 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="상품명을 입력하세요"
           required
         />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1" style={{ color: '#E44232' }}>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#E44232' }} />
           쿠팡 URL
         </label>
         <input
           type="url"
           value={coupangUrl}
           onChange={(e) => setCoupangUrl(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://www.coupang.com/..."
         />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1" style={{ color: '#03C75A' }}>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#03C75A' }} />
           네이버 URL
         </label>
         <input
           type="url"
           value={naverUrl}
           onChange={(e) => setNaverUrl(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://search.shopping.naver.com/..."
         />
       </div>
       <div>
-        <label className="block text-sm font-medium mb-1" style={{ color: '#0068B7' }}>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#0068B7' }} />
           다나와 URL
         </label>
         <input
           type="url"
           value={danawaUrl}
           onChange={(e) => setDanawaUrl(e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://prod.danawa.com/..."
         />
       </div>
