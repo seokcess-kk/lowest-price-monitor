@@ -22,8 +22,9 @@ export async function scrapeDanawa(
       timeout: PAGE_LOAD_TIMEOUT,
     });
 
-    // 가격비교 영역이 동적 로드되므로 대기
-    await page.waitForTimeout(3000);
+    // 가격비교 리스트가 Ajax로 로드되므로 셀렉터 대기 후 추가 안정화
+    await page.waitForSelector('.diff_item .prc_c', { timeout: ELEMENT_WAIT_TIMEOUT }).catch(() => {});
+    await page.waitForTimeout(1000);
 
     // 방법 1: 가격비교 리스트 첫 번째 행 (가격 + 스토어 정확히 매칭)
     const listPrice = await extractListPrice(page);
