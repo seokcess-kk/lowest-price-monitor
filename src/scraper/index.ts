@@ -84,9 +84,20 @@ export async function collectAll(
   const browser = await createBrowser();
   const context = await browser.newContext(BROWSER_CONTEXT_OPTIONS);
 
-  // 쿠팡 전용 브라우저 (로컬 환경에서만 생성)
+  // 쿠팡 전용 브라우저 (로컬 환경에서만 생성, CI에서는 스킵)
+  const isCI = !!process.env.CI || !!process.env.GITHUB_ACTIONS;
   const hasCoupangProducts = (products as Product[]).some((p) => p.coupang_url);
-  const coupangBrowser = hasCoupangProducts ? await createCoupangBrowser() : null;
+  let coupangBrowser: Awaited<ReturnType<typeof createCoupangBrowser>> | null = null;
+
+  if (hasCoupangProducts && !isCI) {
+    try {
+      coupangBrowser = await createCoupangBrowser();
+    } catch (err) {
+      console.warn('[coupang] 전용 브라우저 생성 실패 (CI 환경이거나 Chrome 미설치):', err instanceof Error ? err.message : err);
+    }
+  } else if (hasCoupangProducts && isCI) {
+    console.log('[coupang] CI 환경 감지 — 쿠팡 수집 스킵 (headless: false 필요)');
+  }
 
   try {
     const channels: Channel[] = ['danawa', 'coupang', 'naver'];
@@ -105,6 +116,12 @@ export async function collectAll(
         try {
           // 쿠팡은 전용 브라우저 사용, 나머지는 일반 브라우저
           const isCoupang = channel === 'coupang';
+
+          // 쿠팡 브라우저가 없으면 스킵
+          if (isCoupang && !coupangBrowser) {
+            continue;
+          }
+
           const page = isCoupang && coupangBrowser
             ? await coupangBrowser.newPage()
             : await context.newPage();
