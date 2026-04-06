@@ -67,12 +67,19 @@ async function extractListPrice(page: Page): Promise<ScrapeResult | null> {
     const price = parsePrice(priceText);
     if (price === null) return null;
 
-    // 스토어명 (이미지 alt에서 추출)
+    // 스토어명 (쇼핑몰 로고 이미지의 alt에서 추출)
     let storeName: string | null = null;
     try {
-      const mallImg = await firstItem.$('.logo_over img, .d_mall img');
+      const mallImg = await firstItem.$('.d_mall a.link img');
       if (mallImg) {
         storeName = await mallImg.getAttribute('alt');
+      }
+      // 폴백: .d_mall 내 아무 img
+      if (!storeName) {
+        const fallbackImg = await firstItem.$('.d_mall img');
+        if (fallbackImg) {
+          storeName = await fallbackImg.getAttribute('alt');
+        }
       }
     } catch { /* 무시 */ }
 
