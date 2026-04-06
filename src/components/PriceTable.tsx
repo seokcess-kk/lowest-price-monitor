@@ -54,6 +54,7 @@ export default function PriceTable({ data }: PriceTableProps) {
               {CHANNELS.map((ch) => {
                 const channelPrice = item.prices.find((p) => p.channel === ch);
                 const warning = item.warnings?.find((w) => w.channel === ch);
+                const url = item.urls?.[ch];
                 return (
                   <td key={ch} className="px-4 py-3 text-center">
                     {warning && (
@@ -63,14 +64,37 @@ export default function PriceTable({ data }: PriceTableProps) {
                     )}
                     {channelPrice && channelPrice.price > 0 ? (
                       <div className="flex flex-col items-center gap-1">
-                        <span className="font-semibold text-gray-900">
-                          {channelPrice.price.toLocaleString('ko-KR')}원
-                        </span>
+                        {url ? (
+                          <a
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-semibold text-gray-900 hover:underline"
+                            title={`${CHANNEL_LABELS[ch]}에서 확인`}
+                          >
+                            {channelPrice.price.toLocaleString('ko-KR')}원
+                            <span className="ml-1 text-xs text-gray-400">&#8599;</span>
+                          </a>
+                        ) : (
+                          <span className="font-semibold text-gray-900">
+                            {channelPrice.price.toLocaleString('ko-KR')}원
+                          </span>
+                        )}
                         <PriceChangeIndicator change={channelPrice.change} />
                         {channelPrice.store_name && (
                           <span className="text-xs text-gray-500">{channelPrice.store_name}</span>
                         )}
                       </div>
+                    ) : url ? (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-400 hover:text-blue-500 hover:underline text-sm"
+                        title={`${CHANNEL_LABELS[ch]}에서 확인`}
+                      >
+                        URL &#8599;
+                      </a>
                     ) : (
                       <span className="text-gray-400">-</span>
                     )}

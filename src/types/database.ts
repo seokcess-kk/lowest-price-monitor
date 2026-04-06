@@ -31,10 +31,18 @@ export interface ChannelPrice {
   change: number | null;
 }
 
+/** 채널별 URL 맵 */
+export interface ProductUrls {
+  coupang: string | null;
+  naver: string | null;
+  danawa: string | null;
+}
+
 /** 메인 페이지 표시용 — 상품별 채널 가격 + 전일 대비 변동 */
 export interface PriceWithChange {
   product_id: string;
   product_name: string;
+  urls: ProductUrls;
   prices: ChannelPrice[];
   warnings?: FailureWarning[];
 }

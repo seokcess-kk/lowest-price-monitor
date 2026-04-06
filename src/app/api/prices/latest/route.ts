@@ -122,6 +122,11 @@ export async function GET() {
       return {
         product_id: product.id,
         product_name: product.name,
+        urls: {
+          coupang: product.coupang_url,
+          naver: product.naver_url,
+          danawa: product.danawa_url,
+        },
         prices,
         warnings: warnings.length > 0 ? warnings : undefined,
       };
