@@ -1,95 +1,103 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLatestPrices } from '@/hooks/useLatestPrices';
 import PriceTable from '@/components/PriceTable';
+
+interface CollectStatus {
+  id?: string;
+  status: string;
+  result_success?: number;
+  result_failed?: number;
+  error_message?: string;
+  created_at?: string;
+  completed_at?: string;
+}
 
 export default function Home() {
   const { data, loading, error, refetch } = useLatestPrices();
   const [collecting, setCollecting] = useState(false);
-  const [collectMsg, setCollectMsg] = useState<string | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
-  const productCount = data.length || 1;
-  const estimatedSeconds = 60 + productCount * 30;
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const pollStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/collect');
+      const data: CollectStatus = await res.json();
+      setCollectStatus(data);
+
+      if (data.status === 'completed' || data.status === 'failed') {
+        stopPolling();
+        refetch();
+      }
+    } catch { /* ignore */ }
+  }, [refetch, stopPolling]);
 
   const handleCollect = async () => {
     setCollecting(true);
-    setCollectMsg(null);
-    setElapsed(0);
+    setCollectStatus(null);
     try {
       const res = await fetch('/api/collect', { method: 'POST' });
       const body = await res.json();
       if (!res.ok) {
-        setCollectMsg(body.error || '수집 트리거 실패');
-      } else {
-        // 트리거 성공 후 타이머 시작
-        setIsRunning(true);
-        timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+        setCollectStatus({ status: 'failed', error_message: body.error });
+        return;
       }
+
+      // 폴링 시작 (3초 간격으로 상태 확인)
+      setCollectStatus({ status: 'pending' });
+      pollRef.current = setInterval(pollStatus, 3000);
     } catch {
-      setCollectMsg('수집 트리거 중 오류가 발생했습니다.');
+      setCollectStatus({ status: 'failed', error_message: '수집 요청 중 오류가 발생했습니다.' });
     } finally {
       setCollecting(false);
     }
   };
 
-  const stopTimer = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  // 컴포넌트 언마운트 시 폴링 정리
+  useEffect(() => {
+    return () => stopPolling();
+  }, [stopPolling]);
+
+  const statusMessage = () => {
+    if (!collectStatus) return null;
+    switch (collectStatus.status) {
+      case 'pending':
+        return '수집 대기 중... 로컬 수집기가 요청을 처리합니다.';
+      case 'running':
+        return '수집 진행 중...';
+      case 'completed':
+        return `수집 완료: ${collectStatus.result_success}건 성공, ${collectStatus.result_failed}건 실패`;
+      case 'failed':
+        return `수집 실패: ${collectStatus.error_message || '알 수 없는 오류'}`;
+      default:
+        return null;
     }
-    setIsRunning(false);
   };
 
-  // 수집 중 30초마다 자동 새로고침 (가격 갱신 감지)
-  useEffect(() => {
-    if (isRunning && elapsed > 0 && elapsed % 30 === 0) {
-      refetch();
-    }
-  }, [elapsed, isRunning, refetch]);
-
-  // 예상 시간 초과 시 자동 종료 + 최종 새로고침
-  useEffect(() => {
-    if (isRunning && elapsed >= estimatedSeconds) {
-      stopTimer();
-      refetch();
-      setCollectMsg('수집이 완료되었습니다.');
-    }
-  }, [elapsed, estimatedSeconds, isRunning, refetch]);
-
-  // 컴포넌트 언마운트 시 타이머 정리
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, []);
-
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return m > 0 ? `${m}분 ${s}초` : `${s}초`;
-  };
+  const isActive = collectStatus?.status === 'pending' || collectStatus?.status === 'running';
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">현재 최저가 요약</h1>
         <div className="flex items-center gap-3">
-          {collectMsg && !isRunning && (
-            <span className="text-sm text-gray-600">{collectMsg}</span>
-          )}
           <button
             onClick={handleCollect}
-            disabled={collecting || isRunning}
+            disabled={collecting || isActive}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
           >
-            {collecting ? '트리거 중...' : isRunning ? '수집 중...' : '즉시 수집'}
+            {collecting ? '요청 중...' : isActive ? '수집 중...' : '즉시 수집'}
           </button>
           <button
-            onClick={() => { stopTimer(); refetch(); }}
+            onClick={() => { stopPolling(); refetch(); }}
             className="px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm"
           >
             새로고침
@@ -97,21 +105,20 @@ export default function Home() {
         </div>
       </div>
 
-      {isRunning && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-blue-700">
-              수집 진행 중... {formatTime(elapsed)} 경과 (예상 약 {formatTime(estimatedSeconds)})
-            </span>
-            <span className="text-blue-500">
-              {Math.min(Math.round((elapsed / estimatedSeconds) * 100), 99)}%
-            </span>
-          </div>
-          <div className="mt-2 w-full bg-blue-100 rounded-full h-2">
-            <div
-              className="bg-blue-500 h-2 rounded-full transition-all duration-1000"
-              style={{ width: `${Math.min((elapsed / estimatedSeconds) * 100, 99)}%` }}
-            />
+      {/* 수집 상태 표시 */}
+      {collectStatus && collectStatus.status !== 'idle' && (
+        <div className={`mb-4 p-3 rounded-lg border text-sm ${
+          collectStatus.status === 'completed'
+            ? 'bg-green-50 border-green-200 text-green-700'
+            : collectStatus.status === 'failed'
+              ? 'bg-red-50 border-red-200 text-red-700'
+              : 'bg-blue-50 border-blue-200 text-blue-700'
+        }`}>
+          <div className="flex items-center gap-2">
+            {isActive && (
+              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            )}
+            <span>{statusMessage()}</span>
           </div>
         </div>
       )}

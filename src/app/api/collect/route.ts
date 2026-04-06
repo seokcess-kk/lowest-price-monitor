@@ -1,42 +1,60 @@
 import { NextResponse } from 'next/server';
+import { createServiceClient } from '@/lib/supabase';
 
 export async function POST() {
   try {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) {
-      return NextResponse.json({ error: 'GITHUB_TOKEN이 설정되지 않았습니다.' }, { status: 500 });
-    }
+    const supabase = createServiceClient();
 
-    const repo = process.env.GITHUB_REPOSITORY;
-    if (!repo) {
-      return NextResponse.json({ error: 'GITHUB_REPOSITORY가 설정되지 않았습니다.' }, { status: 500 });
-    }
+    // 이미 pending/running 상태인 요청이 있으면 중복 방지
+    const { data: existing } = await supabase
+      .from('collect_requests')
+      .select('id, status')
+      .in('status', ['pending', 'running'])
+      .limit(1);
 
-    const workflowFile = process.env.GITHUB_WORKFLOW_FILE || 'collect-prices.yml';
-
-    const response = await fetch(
-      `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ ref: 'main' }),
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (existing && existing.length > 0) {
       return NextResponse.json(
-        { error: `GitHub API 호출 실패: ${response.status} ${errorText}` },
-        { status: response.status }
+        { message: '이미 수집이 진행 중입니다.', status: existing[0].status },
+        { status: 200 }
       );
     }
 
-    return NextResponse.json({ message: '수집이 트리거되었습니다.' });
-  } catch (err) {
-    return NextResponse.json({ error: '수집 트리거 중 오류가 발생했습니다.' }, { status: 500 });
+    // 수집 요청 생성
+    const { error } = await supabase
+      .from('collect_requests')
+      .insert({ status: 'pending' });
+
+    if (error) {
+      return NextResponse.json(
+        { error: `수집 요청 생성 실패: ${error.message}` },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ message: '수집 요청이 등록되었습니다. 로컬 수집기가 처리합니다.' });
+  } catch {
+    return NextResponse.json({ error: '수집 요청 중 오류가 발생했습니다.' }, { status: 500 });
+  }
+}
+
+/** 수집 상태 조회 */
+export async function GET() {
+  try {
+    const supabase = createServiceClient();
+
+    const { data, error } = await supabase
+      .from('collect_requests')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error) {
+      return NextResponse.json({ status: 'idle' });
+    }
+
+    return NextResponse.json(data);
+  } catch {
+    return NextResponse.json({ status: 'idle' });
   }
 }
