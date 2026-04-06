@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
-import { createBrowser, randomDelay, BROWSER_CONTEXT_OPTIONS } from './utils';
+import { createBrowser, createCoupangBrowser, randomDelay, BROWSER_CONTEXT_OPTIONS } from './utils';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
 import { scrapeDanawa } from './channels/danawa';
@@ -79,17 +79,22 @@ export async function collectAll(
   console.log(`활성 상품 ${products.length}개 발견`);
 
   // 2. 브라우저 인스턴스 생성
+  //    - 쿠팡: persistent context (headless: false 필수, 봇 감지 우회)
+  //    - 다나와/네이버: 일반 headless 브라우저
   const browser = await createBrowser();
   const context = await browser.newContext(BROWSER_CONTEXT_OPTIONS);
 
+  // 쿠팡 전용 브라우저 (로컬 환경에서만 생성)
+  const hasCoupangProducts = (products as Product[]).some((p) => p.coupang_url);
+  const coupangBrowser = hasCoupangProducts ? await createCoupangBrowser() : null;
+
   try {
-    // 다나와(Playwright) 먼저, API 채널은 나중에 (rate limit 대응)
     const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
     for (const product of products as Product[]) {
       for (const channel of channels) {
         const url = getChannelUrl(product, channel);
-        if (!url) continue; // URL 미등록 채널은 건너뜀
+        if (!url) continue;
 
         const result: CollectResult = {
           product_id: product.id,
@@ -98,7 +103,12 @@ export async function collectAll(
         };
 
         try {
-          const page = await context.newPage();
+          // 쿠팡은 전용 브라우저 사용, 나머지는 일반 브라우저
+          const isCoupang = channel === 'coupang';
+          const page = isCoupang && coupangBrowser
+            ? await coupangBrowser.newPage()
+            : await context.newPage();
+
           try {
             console.log(`[${channel}] ${product.name} 수집 중...`);
 
@@ -110,7 +120,6 @@ export async function collectAll(
               result.price = scrapeResult.price;
               result.store_name = scrapeResult.storeName;
 
-              // price_logs에 insert
               const { error: insertError } = await supabase
                 .from('price_logs')
                 .insert({
@@ -134,7 +143,6 @@ export async function collectAll(
                 `[${channel}] ${product.name}: 가격 추출 실패`
               );
 
-              // 에러 로그를 DB에 저장
               await supabase.from('scrape_errors').insert({
                 product_id: product.id,
                 channel,
@@ -150,24 +158,21 @@ export async function collectAll(
           result.error = message;
           errors.push(`[${channel}] ${product.name}: ${message}`);
 
-          // 에러 로그를 DB에 저장
           await supabase.from('scrape_errors').insert({
             product_id: product.id,
             channel,
             error_message: message,
-          }).then(() => {}, () => {}); // 에러 로그 저장 실패는 무시
+          }).then(() => {}, () => {});
         }
 
         results.push(result);
-
-        // 채널 간 2~5초 랜덤 딜레이
         await randomDelay();
       }
     }
   } finally {
-    // 5. 브라우저 종료
     await context.close();
     await browser.close();
+    if (coupangBrowser) await coupangBrowser.close();
   }
 
   // 6. 결과 요약

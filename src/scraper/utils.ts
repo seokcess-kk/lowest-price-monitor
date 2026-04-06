@@ -1,4 +1,6 @@
-import { chromium, type Browser } from 'playwright';
+import { chromium, type Browser, type BrowserContext } from 'playwright';
+import path from 'path';
+import fs from 'fs';
 
 /**
  * 가격 문자열을 숫자로 파싱한다.
@@ -69,3 +71,35 @@ export const PAGE_LOAD_TIMEOUT = 30_000;
 
 /** 요소 대기 타임아웃 (ms) */
 export const ELEMENT_WAIT_TIMEOUT = 10_000;
+
+/** 쿠팡 전용 프로필 경로 */
+const COUPANG_PROFILE_DIR = path.resolve(process.cwd(), '.chrome-profile-coupang');
+
+/**
+ * 쿠팡 전용 Playwright persistent context를 생성한다.
+ *
+ * 필수조건:
+ * - headless: false (쿠팡 봇 감지 우회)
+ * - channel: 'chrome' (실제 Chrome 사용)
+ * - persistent context (브라우저 프로필/쿠키 유지)
+ * - 로컬 환경에서만 동작 (GitHub Actions 불가)
+ */
+export async function createCoupangBrowser(): Promise<BrowserContext> {
+  if (!fs.existsSync(COUPANG_PROFILE_DIR)) {
+    fs.mkdirSync(COUPANG_PROFILE_DIR, { recursive: true });
+  }
+
+  const context = await chromium.launchPersistentContext(COUPANG_PROFILE_DIR, {
+    headless: false,
+    channel: 'chrome',
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-first-run',
+      '--disable-extensions',
+    ],
+    viewport: { width: 1280, height: 800 },
+    locale: 'ko-KR',
+  });
+
+  return context;
+}

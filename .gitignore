@@ -44,3 +44,7 @@ next-env.d.ts
 _workspace/
 
 .vercel
+
+# chrome profiles (coupang scraper)
+.chrome-profile*
+debug-coupang*.png
