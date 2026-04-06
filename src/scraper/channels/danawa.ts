@@ -7,10 +7,10 @@ export interface ScrapeResult {
 }
 
 /**
- * 다나와 가격비교 페이지에서 최저가를 수집한다.
+ * 다나와 가격비교 페이지에서 쇼핑몰별 최저가를 수집한다.
  *
- * 가격비교 리스트 첫 번째 행에서 가격과 판매처를 함께 추출한다.
- * 리스트가 없으면 상단 최저가 영역에서 폴백.
+ * #lowPriceCompanyArea > ul.list__mall-price > li:first-child 에서
+ * 가격(.text__num)과 판매채널(img.alt)을 추출한다.
  */
 export async function scrapeDanawa(
   url: string,
@@ -22,25 +22,25 @@ export async function scrapeDanawa(
       timeout: PAGE_LOAD_TIMEOUT,
     });
 
-    // 가격비교 리스트가 Ajax로 로드되므로 셀렉터 대기 후 추가 안정화
-    await page.waitForSelector('.diff_item .prc_c', { timeout: ELEMENT_WAIT_TIMEOUT }).catch(() => {});
+    // 쇼핑몰별 최저가 영역 로딩 대기
+    await page.waitForSelector('#lowPriceCompanyArea .list__mall-price .list-item', {
+      timeout: ELEMENT_WAIT_TIMEOUT,
+    }).catch(() => {});
     await page.waitForTimeout(1000);
 
-    // 방법 1: 가격비교 리스트 첫 번째 행 (가격 + 스토어 정확히 매칭)
+    // 방법 1: 쇼핑몰별 최저가 첫 번째 항목
+    const mallPrice = await extractMallPrice(page);
+    if (mallPrice) return mallPrice;
+
+    // 방법 2: 기존 가격비교 리스트 폴백
     const listPrice = await extractListPrice(page);
     if (listPrice) return listPrice;
 
-    // 방법 2: 상단 최저가 영역 폴백
-    const topPrice = await extractTopPrice(page);
-    if (topPrice) return topPrice;
-
-    // 페이지 상태 진단
     const diagnosis = await page.evaluate(() => {
       const title = document.title;
-      const body = document.body.innerText.substring(0, 200);
+      const hasLowPrice = !!document.querySelector('#lowPriceCompanyArea');
       const hasDiffItem = !!document.querySelector('.diff_item');
-      const hasSellPrice = !!document.querySelector('.sell-price');
-      return { title, body, hasDiffItem, hasSellPrice };
+      return { title, hasLowPrice, hasDiffItem };
     });
 
     console.warn(`[danawa] 가격 추출 실패 - 진단: ${JSON.stringify(diagnosis)}`);
@@ -52,13 +52,43 @@ export async function scrapeDanawa(
   }
 }
 
-/** 가격비교 리스트 첫 번째 행에서 가격 + 스토어명 추출 */
+/** #lowPriceCompanyArea의 첫 번째 쇼핑몰에서 가격 + 스토어명 추출 */
+async function extractMallPrice(page: Page): Promise<ScrapeResult | null> {
+  try {
+    const firstItem = await page.$('#lowPriceCompanyArea .list__mall-price .list-item:first-child');
+    if (!firstItem) return null;
+
+    // 가격: .text__num
+    const priceEl = await firstItem.$('.text__num');
+    if (!priceEl) return null;
+
+    const priceText = await priceEl.textContent();
+    if (!priceText) return null;
+
+    const price = parsePrice(priceText);
+    if (price === null) return null;
+
+    // 스토어명: img.alt
+    let storeName: string | null = null;
+    try {
+      const mallImg = await firstItem.$('.box__logo img');
+      if (mallImg) {
+        storeName = await mallImg.getAttribute('alt');
+      }
+    } catch { /* 무시 */ }
+
+    return { price, storeName };
+  } catch {
+    return null;
+  }
+}
+
+/** 기존 가격비교 리스트 폴백 */
 async function extractListPrice(page: Page): Promise<ScrapeResult | null> {
   try {
     const firstItem = await page.$('.diff_item:first-child');
     if (!firstItem) return null;
 
-    // 가격
     const priceEl = await firstItem.$('.prc_c');
     if (!priceEl) return null;
 
@@ -68,14 +98,12 @@ async function extractListPrice(page: Page): Promise<ScrapeResult | null> {
     const price = parsePrice(priceText);
     if (price === null) return null;
 
-    // 스토어명 (쇼핑몰 로고 이미지의 alt에서 추출)
     let storeName: string | null = null;
     try {
       const mallImg = await firstItem.$('.d_mall a.link img');
       if (mallImg) {
         storeName = await mallImg.getAttribute('alt');
       }
-      // 폴백: .d_mall 내 아무 img
       if (!storeName) {
         const fallbackImg = await firstItem.$('.d_mall img');
         if (fallbackImg) {
@@ -88,28 +116,4 @@ async function extractListPrice(page: Page): Promise<ScrapeResult | null> {
   } catch {
     return null;
   }
-}
-
-/** 상단 최저가 영역에서 가격 추출 (스토어 정보 없음) */
-async function extractTopPrice(page: Page): Promise<ScrapeResult | null> {
-  const selectors = ['a.link__sell-price', 'div.sell-price'];
-
-  for (const selector of selectors) {
-    try {
-      const el = await page.waitForSelector(selector, { timeout: ELEMENT_WAIT_TIMEOUT });
-      if (!el) continue;
-
-      const text = await el.textContent();
-      if (!text) continue;
-
-      const price = parsePrice(text);
-      if (price === null) continue;
-
-      return { price, storeName: null };
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
 }
