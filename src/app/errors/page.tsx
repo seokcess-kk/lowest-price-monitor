@@ -17,10 +17,16 @@ const CHANNEL_LABELS: Record<string, string> = {
   danawa: '다나와',
 };
 
+const CHANNEL_DOTS: Record<string, string> = {
+  coupang: '#E44232',
+  naver: '#03C75A',
+  danawa: '#0068B7',
+};
+
 const CHANNEL_COLORS: Record<string, string> = {
-  coupang: 'bg-red-100 text-red-700',
-  naver: 'bg-green-100 text-green-700',
-  danawa: 'bg-blue-100 text-blue-700',
+  coupang: 'bg-red-50 text-red-700',
+  naver: 'bg-green-50 text-green-700',
+  danawa: 'bg-blue-50 text-blue-700',
 };
 
 export default function ErrorsPage() {
@@ -98,7 +104,8 @@ export default function ErrorsPage() {
                     {err.product_name}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`inline-block px-2 py-1 rounded text-xs font-medium ${CHANNEL_COLORS[err.channel] || 'bg-gray-100 text-gray-700'}`}>
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium ${CHANNEL_COLORS[err.channel] || 'bg-gray-100 text-gray-700'}`}>
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CHANNEL_DOTS[err.channel] || '#666' }} />
                       {CHANNEL_LABELS[err.channel] || err.channel}
                     </span>
                   </td>

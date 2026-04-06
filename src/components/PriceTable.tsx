@@ -63,16 +63,16 @@ export default function PriceTable({ data }: PriceTableProps) {
                     )}
                     {channelPrice && channelPrice.price > 0 ? (
                       <div className="flex flex-col items-center gap-1">
-                        <span className="font-medium">
+                        <span className="font-semibold text-gray-900">
                           {channelPrice.price.toLocaleString('ko-KR')}원
                         </span>
                         <PriceChangeIndicator change={channelPrice.change} />
                         {channelPrice.store_name && (
-                          <span className="text-xs text-gray-400">{channelPrice.store_name}</span>
+                          <span className="text-xs text-gray-500">{channelPrice.store_name}</span>
                         )}
                       </div>
                     ) : (
-                      <span className="text-gray-300">-</span>
+                      <span className="text-gray-400">-</span>
                     )}
                   </td>
                 );

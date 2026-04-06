@@ -125,7 +125,7 @@ export default function ExportPage() {
                 onChange={(e) => handleSelectAll(e.target.checked)}
                 className="w-4 h-4"
               />
-              <span className="font-medium">전체 선택</span>
+              <span className="font-medium text-gray-900">전체 선택</span>
             </label>
             <div className="ml-6 space-y-1">
               {products.map((product) => (
@@ -136,7 +136,7 @@ export default function ExportPage() {
                     onChange={() => handleToggleProduct(product.id)}
                     className="w-4 h-4"
                   />
-                  <span className="text-sm">{product.name}</span>
+                  <span className="text-sm text-gray-800">{product.name}</span>
                 </label>
               ))}
             </div>
