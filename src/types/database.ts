@@ -22,6 +22,7 @@ export interface PriceLog {
   store_name: string | null;
   collected_at: string;
   is_manual: boolean;
+  is_suspicious: boolean;
 }
 
 /** 채널별 가격 정보 (메인 페이지 표시용) */

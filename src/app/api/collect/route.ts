@@ -40,6 +40,25 @@ export async function POST() {
       );
     }
 
+    // Rate limit: 최근 60초 내에 새로 생성된 요청이 있으면 거절
+    // (완료된 것도 포함 — 너무 잦은 연속 트리거 방지)
+    const sixtySecAgo = new Date(Date.now() - 60_000).toISOString();
+    const { data: recent } = await supabase
+      .from('collect_requests')
+      .select('id, created_at')
+      .gte('created_at', sixtySecAgo)
+      .limit(1);
+
+    if (recent && recent.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            '직전 수집 요청 후 1분이 지나지 않았습니다. 잠시 후 다시 시도해주세요.',
+        },
+        { status: 429 }
+      );
+    }
+
     // 큐 row 생성
     const { data: created, error: insertError } = await supabase
       .from('collect_requests')

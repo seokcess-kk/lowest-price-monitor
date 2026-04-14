@@ -87,6 +87,35 @@ export async function collectAll(
 
   const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
+  // 이상치 감지용: 각 (productId, channel) → 가장 최근 수집가 lookup
+  // 한 번의 쿼리로 전체 활성 상품의 직전 가격을 가져와 Map으로 인덱싱
+  const productIds = (products as Product[]).map((p) => p.id);
+  const previousMap = new Map<string, number>(); // key: "productId:channel"
+  try {
+    const { data: recentLogs } = await supabase
+      .from('price_logs')
+      .select('product_id, channel, price, collected_at')
+      .in('product_id', productIds)
+      .order('collected_at', { ascending: false })
+      .limit(5000);
+    for (const log of recentLogs ?? []) {
+      const key = `${log.product_id}:${log.channel}`;
+      if (!previousMap.has(key)) {
+        previousMap.set(key, log.price as number);
+      }
+    }
+  } catch (e) {
+    console.warn('[collectAll] 이상치 baseline 조회 실패 (감지 생략):', e);
+  }
+
+  /** 직전 값 대비 50% 이상 변동 → 이상치 */
+  const SUSPICIOUS_THRESHOLD = 0.5;
+  const isSuspicious = (prev: number | undefined, curr: number): boolean => {
+    if (prev === undefined || prev <= 0 || curr <= 0) return false;
+    const ratio = Math.abs(curr - prev) / prev;
+    return ratio >= SUSPICIOUS_THRESHOLD;
+  };
+
   // bulk insert를 위해 누적
   const priceRows: Array<{
     product_id: string;
@@ -94,6 +123,7 @@ export async function collectAll(
     price: number;
     store_name: string | null;
     is_manual: boolean;
+    is_suspicious: boolean;
   }> = [];
   const errorRows: Array<{
     product_id: string;
@@ -124,12 +154,23 @@ export async function collectAll(
           result.success = true;
           result.price = scrapeResult.price;
           result.store_name = scrapeResult.storeName;
+          const prev = previousMap.get(`${product.id}:${channel}`);
+          const suspicious = isSuspicious(prev, scrapeResult.price);
+          if (suspicious) {
+            const ratioPct = prev
+              ? (((scrapeResult.price - prev) / prev) * 100).toFixed(1)
+              : 'n/a';
+            console.warn(
+              `[collectAll] 이상치 감지 [${channel}] ${product.name}: ${prev} → ${scrapeResult.price} (${ratioPct}%)`
+            );
+          }
           priceRows.push({
             product_id: product.id,
             channel,
             price: scrapeResult.price,
             store_name: scrapeResult.storeName,
             is_manual: isManual,
+            is_suspicious: suspicious,
           });
         } else {
           result.error = '가격 추출 실패';
