@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { href: '/products/manage', label: '상품 관리' },
   { href: '/export', label: 'Export' },
   { href: '/errors', label: '에러 로그' },
+  { href: '/brightdata', label: 'API 사용량' },
 ];
 
 export default function Navigation() {

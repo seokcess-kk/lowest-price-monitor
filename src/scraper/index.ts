@@ -1,6 +1,7 @@
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
 import { randomDelay } from './utils';
+import { flushUsage } from './brightdata';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
 import { scrapeDanawa } from './channels/danawa';
@@ -167,6 +168,9 @@ export async function collectAll(
       console.error(`scrape_errors bulk insert 실패: ${errInsertError.message}`);
     }
   }
+
+  // Bright Data 사용량 로그 flush
+  await flushUsage();
 
   const success = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;

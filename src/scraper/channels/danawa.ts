@@ -1,3 +1,5 @@
+import { callWebUnlocker } from '../brightdata';
+
 export interface ScrapeResult {
   price: number;
   storeName: string | null;
@@ -19,35 +21,14 @@ export interface ScrapeResult {
  * 속성 따옴표는 작은/큰 둘 다 허용.
  */
 export async function scrapeDanawa(url: string): Promise<ScrapeResult | null> {
-  const token = process.env.BRIGHTDATA_API_TOKEN;
-  const zone = process.env.BRIGHTDATA_ZONE;
-
-  if (!token || !zone) {
-    throw new Error(
-      'BRIGHTDATA_API_TOKEN / BRIGHTDATA_ZONE 환경 변수가 설정되지 않았습니다'
-    );
-  }
-
-  const res = await fetch('https://api.brightdata.com/request', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      zone,
-      url,
-      format: 'raw',
-      country: 'kr',
-    }),
-  });
+  const res = await callWebUnlocker({ channel: 'danawa', url });
 
   if (!res.ok) {
-    console.warn(`[danawa] Web Unlocker ${res.status}: ${await res.text().catch(() => '')}`);
+    console.warn(`[danawa] Web Unlocker ${res.status}`);
     return null;
   }
 
-  const html = await res.text();
+  const html = res.text ?? '';
   if (html.length < 5_000) {
     console.warn('[danawa] 응답 크기가 비정상적으로 작음');
     return null;

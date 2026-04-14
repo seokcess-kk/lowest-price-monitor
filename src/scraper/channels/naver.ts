@@ -1,3 +1,5 @@
+import { callWebUnlocker } from '../brightdata';
+
 export interface ScrapeResult {
   price: number;
   storeName: string | null;
@@ -46,29 +48,17 @@ export async function scrapeNaver(
 /** Bright Data Web Unlocker로 카탈로그 HTML 받아 파싱 */
 async function tryWebUnlocker(
   url: string,
-  token: string,
-  zone: string
+  _token: string,
+  _zone: string
 ): Promise<ScrapeResult | null> {
-  const res = await fetch('https://api.brightdata.com/request', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      zone,
-      url,
-      format: 'raw',
-      country: 'kr',
-    }),
-  });
+  const res = await callWebUnlocker({ channel: 'naver', url });
 
   if (!res.ok) {
-    console.warn(`[naver] Web Unlocker ${res.status}: ${await res.text().catch(() => '')}`);
+    console.warn(`[naver] Web Unlocker ${res.status}`);
     return null;
   }
 
-  const html = await res.text();
+  const html = res.text ?? '';
 
   // 차단 페이지 방어 — Bright Data가 뚫지 못한 드문 케이스
   if (html.includes('접속이 일시적으로 제한')) {

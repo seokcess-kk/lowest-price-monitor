@@ -1,3 +1,5 @@
+import { callWebUnlocker } from '../brightdata';
+
 export interface ScrapeResult {
   price: number;
   storeName: string | null;
@@ -9,39 +11,16 @@ export interface ScrapeResult {
  *
  * 이전에는 쿠팡 파트너스 API를 썼으나, 파트너스 API 가격이 웹사이트 실제 판매가와
  * 달라(와우·쿠폰 할인 미반영) 정확도 문제가 있어 Web Unlocker 방식으로 전환.
- *
- * _page 파라미터는 공용 시그니처 호환용이며 사용하지 않음.
  */
 export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
-  const token = process.env.BRIGHTDATA_API_TOKEN;
-  const zone = process.env.BRIGHTDATA_ZONE;
-
-  if (!token || !zone) {
-    throw new Error(
-      'BRIGHTDATA_API_TOKEN / BRIGHTDATA_ZONE 환경 변수가 설정되지 않았습니다'
-    );
-  }
-
-  const res = await fetch('https://api.brightdata.com/request', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      zone,
-      url,
-      format: 'raw',
-      country: 'kr',
-    }),
-  });
+  const res = await callWebUnlocker({ channel: 'coupang', url });
 
   if (!res.ok) {
-    console.warn(`[coupang] Web Unlocker ${res.status}: ${await res.text().catch(() => '')}`);
+    console.warn(`[coupang] Web Unlocker ${res.status}`);
     return null;
   }
 
-  const html = await res.text();
+  const html = res.text ?? '';
 
   // 차단 페이지 방어
   if (html.includes('차단된 접근입니다') || html.length < 5_000) {
