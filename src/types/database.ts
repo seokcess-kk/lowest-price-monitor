@@ -5,6 +5,7 @@ export type Channel = 'coupang' | 'naver' | 'danawa';
 export interface Product {
   id: string;
   name: string;
+  sabangnet_code: string | null;
   coupang_url: string | null;
   naver_url: string | null;
   danawa_url: string | null;
@@ -42,6 +43,7 @@ export interface ProductUrls {
 export interface PriceWithChange {
   product_id: string;
   product_name: string;
+  sabangnet_code: string | null;
   urls: ProductUrls;
   prices: ChannelPrice[];
   warnings?: FailureWarning[];
@@ -50,6 +52,7 @@ export interface PriceWithChange {
 /** 상품 등록 입력 */
 export interface CreateProductInput {
   name: string;
+  sabangnet_code?: string | null;
   coupang_url?: string | null;
   naver_url?: string | null;
   danawa_url?: string | null;
@@ -58,6 +61,7 @@ export interface CreateProductInput {
 /** 상품 수정 입력 */
 export interface UpdateProductInput {
   name?: string;
+  sabangnet_code?: string | null;
   coupang_url?: string | null;
   naver_url?: string | null;
   danawa_url?: string | null;

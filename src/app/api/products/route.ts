@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       .from('products')
       .insert({
         name: body.name.trim(),
+        sabangnet_code: body.sabangnet_code?.trim() || null,
         coupang_url: body.coupang_url || null,
         naver_url: body.naver_url || null,
         danawa_url: body.danawa_url || null,

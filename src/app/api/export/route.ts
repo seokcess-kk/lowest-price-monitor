@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from('price_logs')
-      .select('*, products(name)')
+      .select('*, products(name, sabangnet_code)')
       .gte('collected_at', startDate)
       .lte('collected_at', endDate + 'T23:59:59.999Z')
       .order('collected_at', { ascending: true });
@@ -34,10 +34,11 @@ export async function GET(request: NextRequest) {
     }
 
     const rows = (data || []).map((row: Record<string, unknown>) => {
-      const products = row.products as { name: string } | null;
+      const products = row.products as { name: string; sabangnet_code: string | null } | null;
       return {
         date: (row.collected_at as string).split('T')[0],
         productName: products?.name || '',
+        sabangnetCode: products?.sabangnet_code ?? null,
         channel: row.channel as string,
         price: row.price as number,
         storeName: (row.store_name as string) || null,

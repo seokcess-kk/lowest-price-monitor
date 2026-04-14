@@ -8,6 +8,7 @@ import { exportToExcel } from '@/lib/export';
 interface ExportRow {
   date: string;
   productName: string;
+  sabangnetCode: string | null;
   channel: string;
   price: number;
   storeName: string | null;

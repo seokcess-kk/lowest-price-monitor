@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
       .filter((it) => it.name && it.name.trim() !== '')
       .map((it) => ({
         name: it.name.trim(),
+        sabangnet_code: it.sabangnet_code?.trim() || null,
         coupang_url: it.coupang_url?.trim() || null,
         naver_url: it.naver_url?.trim() || null,
         danawa_url: it.danawa_url?.trim() || null,

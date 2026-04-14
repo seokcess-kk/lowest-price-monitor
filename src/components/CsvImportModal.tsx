@@ -7,6 +7,7 @@ import Modal from './Modal';
 interface ParsedRow {
   rowIndex: number;
   name: string;
+  sabangnet_code: string | null;
   coupang_url: string | null;
   naver_url: string | null;
   danawa_url: string | null;
@@ -21,12 +22,12 @@ interface CsvImportModalProps {
 
 interface DupResult {
   rowIndex: number;
-  status: 'new' | 'duplicate' | 'similar';
+  status: 'new' | 'duplicate' | 'similar' | 'sabangnet_conflict';
   duplicates: Array<{
-    kind: 'urlMatch' | 'nameSimilar';
+    kind: 'urlMatch' | 'nameSimilar' | 'sabangnetMatch';
     productId: string;
     productName: string;
-    matchedField?: 'coupang_url' | 'naver_url' | 'danawa_url';
+    matchedField?: 'coupang_url' | 'naver_url' | 'danawa_url' | 'sabangnet_code';
   }>;
 }
 
@@ -48,6 +49,13 @@ function normalizeSheetRow(
   };
 
   const name = get(['name', '상품명', 'product']);
+  const sabangnet = get([
+    'sabangnet_code',
+    'sabangnet',
+    '사방넷코드',
+    '사방넷',
+    '사방넷 코드',
+  ]);
   const coupang = get(['coupang_url', 'coupang', '쿠팡', '쿠팡url']);
   const naver = get(['naver_url', 'naver', '네이버', '네이버url']);
   const danawa = get(['danawa_url', 'danawa', '다나와', '다나와url']);
@@ -55,6 +63,7 @@ function normalizeSheetRow(
   const row: ParsedRow = {
     rowIndex,
     name,
+    sabangnet_code: sabangnet || null,
     coupang_url: coupang || null,
     naver_url: naver || null,
     danawa_url: danawa || null,
@@ -87,13 +96,15 @@ export default function CsvImportModal({
   const [dupResults, setDupResults] = useState<Map<number, DupResult>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [includeSimilar, setIncludeSimilar] = useState(true);
+  const [includeSabangnetConflict, setIncludeSabangnetConflict] = useState(false);
   const [createdCount, setCreatedCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const downloadTemplate = () => {
-    const headers = ['name', 'coupang_url', 'naver_url', 'danawa_url'];
+    const headers = ['name', 'sabangnet_code', 'coupang_url', 'naver_url', 'danawa_url'];
     const example = [
       '예시 상품 (이 행은 삭제하고 사용하세요)',
+      'SB-12345',
       'https://www.coupang.com/vp/products/123456789',
       'https://search.shopping.naver.com/catalog/12345678',
       'https://prod.danawa.com/info/?pcode=1234567',
@@ -101,8 +112,8 @@ export default function CsvImportModal({
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example]);
 
-    // 열 너비 — 300px
-    ws['!cols'] = headers.map(() => ({ wpx: 300 }));
+    // 열 너비 — 사방넷코드 150, 나머지 300
+    ws['!cols'] = headers.map((h) => ({ wpx: h === 'sabangnet_code' ? 150 : 300 }));
 
     // 헤더 셀(A1~D1) bold + 음영
     const headerStyle = {
@@ -147,6 +158,7 @@ export default function CsvImportModal({
     setDupResults(new Map());
     setError(null);
     setIncludeSimilar(true);
+    setIncludeSabangnetConflict(false);
     setCreatedCount(0);
     if (fileRef.current) fileRef.current.value = '';
   };
@@ -182,6 +194,7 @@ export default function CsvImportModal({
       .map((r) => ({
         rowIndex: r.rowIndex,
         name: r.name,
+        sabangnet_code: r.sabangnet_code,
         coupang_url: r.coupang_url,
         naver_url: r.naver_url,
         danawa_url: r.danawa_url,
@@ -212,6 +225,7 @@ export default function CsvImportModal({
     let newCount = 0;
     let duplicate = 0;
     let similar = 0;
+    let sabangnetConflict = 0;
     let errors = 0;
     for (const r of rows) {
       if (r.error) {
@@ -221,12 +235,16 @@ export default function CsvImportModal({
       const dup = dupResults.get(r.rowIndex);
       if (!dup || dup.status === 'new') newCount++;
       else if (dup.status === 'duplicate') duplicate++;
+      else if (dup.status === 'sabangnet_conflict') sabangnetConflict++;
       else if (dup.status === 'similar') similar++;
     }
-    return { newCount, duplicate, similar, errors };
+    return { newCount, duplicate, similar, sabangnetConflict, errors };
   })();
 
-  const willInsertCount = summary.newCount + (includeSimilar ? summary.similar : 0);
+  const willInsertCount =
+    summary.newCount +
+    (includeSimilar ? summary.similar : 0) +
+    (includeSabangnetConflict ? summary.sabangnetConflict : 0);
 
   const handleSubmit = async () => {
     setStep('submitting');
@@ -236,10 +254,12 @@ export default function CsvImportModal({
         const dup = dupResults.get(r.rowIndex);
         if (!dup || dup.status === 'new') return true;
         if (dup.status === 'similar') return includeSimilar;
+        if (dup.status === 'sabangnet_conflict') return includeSabangnetConflict;
         return false;
       })
       .map((r) => ({
         name: r.name,
+        sabangnet_code: r.sabangnet_code,
         coupang_url: r.coupang_url,
         naver_url: r.naver_url,
         danawa_url: r.danawa_url,
@@ -285,6 +305,10 @@ export default function CsvImportModal({
               <code className="bg-gray-100 px-1 rounded">상품명</code> (필수)
             </li>
             <li>
+              <code className="bg-gray-100 px-1 rounded">sabangnet_code</code> /{' '}
+              <code className="bg-gray-100 px-1 rounded">사방넷코드</code> (선택)
+            </li>
+            <li>
               <code className="bg-gray-100 px-1 rounded">coupang_url</code> /{' '}
               <code className="bg-gray-100 px-1 rounded">쿠팡</code>
             </li>
@@ -323,7 +347,7 @@ export default function CsvImportModal({
 
       {step === 'preview' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-4 gap-2 text-center text-xs">
+          <div className="grid grid-cols-5 gap-2 text-center text-xs">
             <div className="bg-green-50 border border-green-200 rounded p-2">
               <div className="font-semibold text-green-700">신규</div>
               <div className="text-xl font-bold text-green-700">
@@ -333,6 +357,12 @@ export default function CsvImportModal({
             <div className="bg-red-50 border border-red-200 rounded p-2">
               <div className="font-semibold text-red-700">URL 중복</div>
               <div className="text-xl font-bold text-red-700">{summary.duplicate}</div>
+            </div>
+            <div className="bg-orange-50 border border-orange-200 rounded p-2">
+              <div className="font-semibold text-orange-700">사방넷 중복</div>
+              <div className="text-xl font-bold text-orange-700">
+                {summary.sabangnetConflict}
+              </div>
             </div>
             <div className="bg-yellow-50 border border-yellow-200 rounded p-2">
               <div className="font-semibold text-yellow-700">이름 유사</div>
@@ -345,6 +375,20 @@ export default function CsvImportModal({
               <div className="text-xl font-bold text-gray-700">{summary.errors}</div>
             </div>
           </div>
+
+          {summary.sabangnetConflict > 0 && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={includeSabangnetConflict}
+                onChange={(e) => setIncludeSabangnetConflict(e.target.checked)}
+              />
+              <span>
+                사방넷코드 중복 항목도 등록 ({summary.sabangnetConflict}건) —{' '}
+                <span className="text-orange-700">같은 코드가 이미 존재함</span>
+              </span>
+            </label>
+          )}
 
           {summary.similar > 0 && (
             <label className="flex items-center gap-2 text-sm">
@@ -380,6 +424,13 @@ export default function CsvImportModal({
                   } else if (dup.status === 'duplicate') {
                     badge = { text: 'URL 중복', color: 'bg-red-100 text-red-700' };
                     note = `기존: ${dup.duplicates[0]?.productName ?? ''}`;
+                  } else if (dup.status === 'sabangnet_conflict') {
+                    badge = {
+                      text: '사방넷 중복',
+                      color: 'bg-orange-100 text-orange-700',
+                    };
+                    const hit = dup.duplicates.find((d) => d.kind === 'sabangnetMatch');
+                    note = `기존: ${hit?.productName ?? ''} (사방넷코드)`;
                   } else {
                     badge = { text: '이름 유사', color: 'bg-yellow-100 text-yellow-700' };
                     note = `기존: ${dup.duplicates[0]?.productName ?? ''}`;

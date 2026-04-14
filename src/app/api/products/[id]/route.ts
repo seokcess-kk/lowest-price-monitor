@@ -42,6 +42,8 @@ export async function PUT(
     const supabase = createServiceClient();
     const updateData: Record<string, unknown> = {};
     if (body.name !== undefined) updateData.name = body.name;
+    if (body.sabangnet_code !== undefined)
+      updateData.sabangnet_code = body.sabangnet_code?.trim() || null;
     if (body.coupang_url !== undefined) updateData.coupang_url = body.coupang_url;
     if (body.naver_url !== undefined) updateData.naver_url = body.naver_url;
     if (body.danawa_url !== undefined) updateData.danawa_url = body.danawa_url;

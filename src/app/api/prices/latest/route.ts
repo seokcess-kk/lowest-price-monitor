@@ -135,6 +135,7 @@ export async function GET() {
       return {
         product_id: product.id,
         product_name: product.name,
+        sabangnet_code: product.sabangnet_code ?? null,
         urls: {
           coupang: product.coupang_url,
           naver: product.naver_url,

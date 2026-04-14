@@ -9,8 +9,21 @@ interface ProductFormProps {
   onCancel?: () => void;
 }
 
+interface DupResponse {
+  results: Array<{
+    rowIndex: number;
+    status: 'new' | 'duplicate' | 'similar' | 'sabangnet_conflict';
+    duplicates: Array<{
+      kind: 'urlMatch' | 'nameSimilar' | 'sabangnetMatch';
+      productId: string;
+      productName: string;
+    }>;
+  }>;
+}
+
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
   const [name, setName] = useState(initialData?.name || '');
+  const [sabangnetCode, setSabangnetCode] = useState(initialData?.sabangnet_code || '');
   const [coupangUrl, setCoupangUrl] = useState(initialData?.coupang_url || '');
   const [naverUrl, setNaverUrl] = useState(initialData?.naver_url || '');
   const [danawaUrl, setDanawaUrl] = useState(initialData?.danawa_url || '');
@@ -22,14 +35,54 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
 
     setLoading(true);
     try {
-      await onSubmit({
+      const payload: CreateProductInput = {
         name: name.trim(),
+        sabangnet_code: sabangnetCode.trim() || null,
         coupang_url: coupangUrl.trim() || null,
         naver_url: naverUrl.trim() || null,
         danawa_url: danawaUrl.trim() || null,
-      });
+      };
+
+      // 사방넷코드가 입력된 경우만 충돌 체크 — 같은 코드가 다른 상품에 있으면 사용자 승인
+      if (payload.sabangnet_code) {
+        try {
+          const res = await fetch('/api/products/check-duplicates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              items: [
+                {
+                  rowIndex: 0,
+                  name: payload.name,
+                  sabangnet_code: payload.sabangnet_code,
+                  excludeId: initialData?.id ?? null,
+                },
+              ],
+            }),
+          });
+          if (res.ok) {
+            const json: DupResponse = await res.json();
+            const r = json.results?.[0];
+            if (r?.status === 'sabangnet_conflict') {
+              const other = r.duplicates.find((d) => d.kind === 'sabangnetMatch');
+              const ok = window.confirm(
+                `사방넷코드 "${payload.sabangnet_code}"가 이미 "${other?.productName ?? '다른 상품'}"에 등록되어 있습니다.\n\n그래도 이 상품에 같은 코드를 저장할까요?`
+              );
+              if (!ok) {
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        } catch {
+          /* 중복 확인 실패는 폼 제출을 막지 않는다 */
+        }
+      }
+
+      await onSubmit(payload);
       if (!initialData) {
         setName('');
+        setSabangnetCode('');
         setCoupangUrl('');
         setNaverUrl('');
         setDanawaUrl('');
@@ -50,6 +103,19 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="상품명을 입력하세요"
           required
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          사방넷코드
+          <span className="ml-1 text-xs text-gray-400 font-normal">(선택)</span>
+        </label>
+        <input
+          type="text"
+          value={sabangnetCode}
+          onChange={(e) => setSabangnetCode(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+          placeholder="예: SB-12345"
         />
       </div>
       <div>

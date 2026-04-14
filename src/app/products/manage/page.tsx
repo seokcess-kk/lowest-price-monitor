@@ -49,7 +49,11 @@ export default function ManageProductsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = products.filter((p) => {
-      if (q && !p.name.toLowerCase().includes(q)) return false;
+      if (q) {
+        const nameHit = p.name.toLowerCase().includes(q);
+        const codeHit = (p.sabangnet_code ?? '').toLowerCase().includes(q);
+        if (!nameHit && !codeHit) return false;
+      }
       if (statusFilter === 'active' && !p.is_active) return false;
       if (statusFilter === 'inactive' && p.is_active) return false;
       return true;
@@ -612,7 +616,14 @@ function ProductRow({
           className="px-3 py-2 cursor-pointer"
           onClick={onToggleExpand}
         >
-          <span className="font-medium text-gray-900">{product.name}</span>
+          <div className="flex flex-col">
+            <span className="font-medium text-gray-900">{product.name}</span>
+            {product.sabangnet_code && (
+              <span className="text-[11px] text-gray-500 font-mono">
+                사방넷 {product.sabangnet_code}
+              </span>
+            )}
+          </div>
         </td>
         <td className="px-3 py-2 text-center" onClick={onToggleExpand}>
           <span className="inline-flex items-center">{channelDots}</span>
@@ -759,6 +770,11 @@ function ProductCardMobile({
                 {isExpanded ? '▼' : '▶'}
               </span>
             </div>
+            {product.sabangnet_code && (
+              <div className="mt-0.5 text-[11px] text-gray-500 font-mono">
+                사방넷 {product.sabangnet_code}
+              </div>
+            )}
             <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500">
               <span className="inline-flex items-center gap-1">
                 {CHANNELS.map((ch) => {
