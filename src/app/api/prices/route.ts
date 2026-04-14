@@ -43,6 +43,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(data as PriceLog[]);
   } catch (err) {
+    console.error('[api/prices]', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

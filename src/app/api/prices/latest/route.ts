@@ -134,6 +134,7 @@ export async function GET() {
 
     return NextResponse.json(result);
   } catch (err) {
+    console.error('[api/prices/latest]', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

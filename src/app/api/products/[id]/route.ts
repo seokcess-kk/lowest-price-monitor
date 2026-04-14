@@ -35,6 +35,7 @@ export async function PUT(
 
     return NextResponse.json(data as Product);
   } catch (err) {
+    console.error('[api/products/:id]', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
