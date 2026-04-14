@@ -43,6 +43,13 @@ next-env.d.ts
 # workspace
 _workspace/
 
+# scraper test artifacts
+naver-test.html
+naver-donkatsu.html
+coupang-test.html
+coupang-failed.html
+danawa-test.html
+
 .vercel
 
 # chrome profiles (coupang scraper)

@@ -6,14 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "collect": "tsx --env-file=.env.local scripts/collect.ts",
+    "collect:ci": "tsx scripts/collect.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
     "next": "16.2.2",
-    "playwright": "^1.59.1",
-    "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
