@@ -281,15 +281,8 @@ function ChannelDetailGrid({
         const isCheapest = cheapestChannel === ch;
         const pct = channelPrice ? changePercent(channelPrice) : null;
 
-        return (
-          <div
-            key={ch}
-            className={`rounded-md border p-3 ${
-              isCheapest
-                ? 'border-yellow-400 bg-yellow-50/40'
-                : 'border-gray-200 bg-white'
-            }`}
-          >
+        const inner = (
+          <>
             <div className="flex items-center justify-between mb-2">
               <span
                 className="text-xs font-semibold"
@@ -298,17 +291,7 @@ function ChannelDetailGrid({
                 {CHANNEL_LABELS[ch]}
                 {isCheapest && <span className="ml-1">👑</span>}
               </span>
-              {url && (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-gray-500 hover:text-blue-600"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  열기 ↗
-                </a>
-              )}
+              {url && <span className="text-xs text-gray-400">↗</span>}
             </div>
             {warning && (
               <div className="text-xs text-red-600 bg-red-50 rounded px-2 py-1 mb-2">
@@ -335,6 +318,29 @@ function ChannelDetailGrid({
             ) : (
               <div className="text-sm text-gray-400">데이터 없음</div>
             )}
+          </>
+        );
+
+        const baseClass = `block rounded-md border p-3 transition-colors ${
+          isCheapest
+            ? 'border-yellow-400 bg-yellow-50/40'
+            : 'border-gray-200 bg-white'
+        }`;
+
+        return url ? (
+          <a
+            key={ch}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`${baseClass} cursor-pointer hover:border-blue-400 hover:bg-blue-50/40`}
+            title={`${CHANNEL_LABELS[ch]} 페이지로 이동`}
+          >
+            {inner}
+          </a>
+        ) : (
+          <div key={ch} className={baseClass}>
+            {inner}
           </div>
         );
       })}

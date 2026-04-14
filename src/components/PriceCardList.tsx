@@ -93,13 +93,9 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                 const url = item.urls?.[ch];
                 const isCheapest = cheapest?.channel === ch;
                 const channelPct = cp ? changePercent(cp) : null;
-                return (
-                  <div
-                    key={ch}
-                    className={`p-1.5 rounded text-center ${
-                      isCheapest ? 'bg-yellow-50' : ''
-                    }`}
-                  >
+
+                const inner = (
+                  <>
                     <div
                       className="font-semibold text-[10px]"
                       style={{ color: CHANNEL_COLORS[ch] }}
@@ -109,18 +105,7 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                     {cp && cp.price > 0 ? (
                       <>
                         <div className="text-gray-900 tabular-nums">
-                          {url ? (
-                            <a
-                              href={url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="hover:underline"
-                            >
-                              {cp.price.toLocaleString('ko-KR')}
-                            </a>
-                          ) : (
-                            cp.price.toLocaleString('ko-KR')
-                          )}
+                          {cp.price.toLocaleString('ko-KR')}
                         </div>
                         {channelPct !== null && Math.abs(channelPct) > 0.05 && (
                           <div
@@ -136,6 +121,27 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                     ) : (
                       <div className="text-gray-400">-</div>
                     )}
+                  </>
+                );
+
+                const baseClass = `block p-1.5 rounded text-center transition-colors ${
+                  isCheapest ? 'bg-yellow-50' : ''
+                }`;
+
+                return url ? (
+                  <a
+                    key={ch}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${baseClass} cursor-pointer hover:bg-blue-50 hover:ring-1 hover:ring-blue-200`}
+                    title={`${CHANNEL_LABELS[ch]} 페이지로 이동`}
+                  >
+                    {inner}
+                  </a>
+                ) : (
+                  <div key={ch} className={baseClass}>
+                    {inner}
                   </div>
                 );
               })}
