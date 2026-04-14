@@ -1,11 +1,32 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 
+/**
+ * 즉시 수집 요청.
+ *
+ * 1. collect_requests 큐에 pending row 생성
+ * 2. GitHub Actions workflow_dispatch 호출 (inputs.request_id로 row id 전달)
+ * 3. GitHub Actions가 시작/완료 시 같은 row의 status를 업데이트
+ *
+ * 동시에 진행 중인 수집이 있으면 거절.
+ */
 export async function POST() {
   try {
+    const token = process.env.GITHUB_TOKEN;
+    const repo = process.env.GITHUB_REPOSITORY;
+    const workflowFile = process.env.GITHUB_WORKFLOW_FILE || 'collect-prices.yml';
+    const ref = process.env.GITHUB_WORKFLOW_REF || 'main';
+
+    if (!token || !repo) {
+      return NextResponse.json(
+        { error: 'GITHUB_TOKEN / GITHUB_REPOSITORY 환경변수가 설정되지 않았습니다.' },
+        { status: 500 }
+      );
+    }
+
     const supabase = createServiceClient();
 
-    // 이미 pending/running 상태인 요청이 있으면 중복 방지
+    // 진행 중 요청 중복 차단
     const { data: existing } = await supabase
       .from('collect_requests')
       .select('id, status')
@@ -19,25 +40,70 @@ export async function POST() {
       );
     }
 
-    // 수집 요청 생성
-    const { error } = await supabase
+    // 큐 row 생성
+    const { data: created, error: insertError } = await supabase
       .from('collect_requests')
-      .insert({ status: 'pending' });
+      .insert({ status: 'pending' })
+      .select()
+      .single();
 
-    if (error) {
+    if (insertError || !created) {
       return NextResponse.json(
-        { error: `수집 요청 생성 실패: ${error.message}` },
+        { error: insertError?.message || '큐 생성 실패' },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ message: '수집 요청이 등록되었습니다. 로컬 수집기가 처리합니다.' });
-  } catch {
-    return NextResponse.json({ error: '수집 요청 중 오류가 발생했습니다.' }, { status: 500 });
+    // GitHub Actions workflow_dispatch
+    const ghRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ref,
+          inputs: { request_id: String(created.id) },
+        }),
+      }
+    );
+
+    if (!ghRes.ok) {
+      const errorText = await ghRes.text().catch(() => '');
+      // 큐 row를 failed로 마크해서 폴링이 영원히 pending에 머물지 않게
+      await supabase
+        .from('collect_requests')
+        .update({
+          status: 'failed',
+          error_message: `GitHub Actions 호출 실패: ${ghRes.status} ${errorText}`,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', created.id);
+
+      return NextResponse.json(
+        { error: `GitHub Actions 호출 실패: ${ghRes.status} ${errorText}` },
+        { status: ghRes.status }
+      );
+    }
+
+    return NextResponse.json({
+      message: '수집이 트리거되었습니다.',
+      requestId: created.id,
+    });
+  } catch (err) {
+    console.error('[api/collect POST]', err);
+    return NextResponse.json(
+      { error: '수집 요청 중 오류가 발생했습니다.' },
+      { status: 500 }
+    );
   }
 }
 
-/** 수집 상태 조회 */
+/** 가장 최근 수집 요청의 상태를 반환 (대시보드 폴링용) */
 export async function GET() {
   try {
     const supabase = createServiceClient();

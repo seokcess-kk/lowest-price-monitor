@@ -3,7 +3,12 @@ name: Collect Prices
 on:
   schedule:
     - cron: '0 0 * * *'  # 매일 00:00 UTC = 09:00 KST
-  workflow_dispatch:       # 대시보드 "즉시 수집" 버튼 / 수동 트리거
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 'collect_requests row ID (대시보드 즉시 수집 버튼이 자동 전달)'
+        required: false
+        type: string
 
 jobs:
   collect:
@@ -32,3 +37,4 @@ jobs:
           BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          COLLECT_REQUEST_ID: ${{ github.event.inputs.request_id }}

@@ -43,11 +43,18 @@ interface CollectSummary {
  *
  * 세 채널 모두 HTTP 기반(쿠팡/네이버/다나와 모두 Bright Data Web Unlocker)이라
  * 브라우저 인스턴스 없이 fetch만으로 동작. 서버리스/CI 환경에서도 실행 가능.
+ *
+ * onProgress 콜백이 주어지면 시작 시 (0, total), 매 상품 완료 시 (done, total)을 통보한다.
+ * 콜백 실패는 수집 흐름을 중단시키지 않는다.
  */
 export async function collectAll(
-  options?: { isManual?: boolean }
+  options?: {
+    isManual?: boolean;
+    onProgress?: (done: number, total: number) => void | Promise<void>;
+  }
 ): Promise<CollectSummary> {
   const isManual = options?.isManual ?? false;
+  const onProgress = options?.onProgress;
   const supabase = createServiceClient();
   const results: CollectResult[] = [];
   const errors: string[] = [];
@@ -67,6 +74,16 @@ export async function collectAll(
   }
 
   console.log(`활성 상품 ${products.length}개 발견`);
+
+  const totalProducts = (products as Product[]).length;
+  let doneProducts = 0;
+  if (onProgress) {
+    try {
+      await onProgress(0, totalProducts);
+    } catch (e) {
+      console.warn('[collectAll] onProgress(start) 실패:', e);
+    }
+  }
 
   const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
@@ -140,6 +157,15 @@ export async function collectAll(
     for (const r of productResults) {
       if (r.error === 'no_url') continue; // URL 없음은 결과에서 제외
       results.push(r);
+    }
+
+    doneProducts++;
+    if (onProgress) {
+      try {
+        await onProgress(doneProducts, totalProducts);
+      } catch (e) {
+        console.warn('[collectAll] onProgress 실패:', e);
+      }
     }
 
     // 상품 간에는 호스트 부담을 줄이려 딜레이 유지
