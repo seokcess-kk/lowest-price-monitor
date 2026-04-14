@@ -54,4 +54,12 @@ danawa-test.html
 
 # chrome profiles (coupang scraper)
 .chrome-profile*
-debug-coupang*.png
+
+# 디버그 임시 파일 — 루트에 남기지 말 것 (CLAUDE.md 규칙)
+debug-*.png
+debug-*.mjs
+debug-*.js
+debug-*.html
+debug-*.ts
+*-debug.html
+*-debug.mjs

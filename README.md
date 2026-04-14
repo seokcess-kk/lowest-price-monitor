@@ -61,6 +61,7 @@ GITHUB_WORKFLOW_FILE=collect-prices.yml  # 선택, 기본값 동일
 | `002_collect_requests.sql` | 즉시 수집 요청 큐 |
 | `003_brightdata_usage.sql` | Bright Data 사용량 추적 |
 | `004_collect_requests_progress.sql` | progress_done / progress_total 컬럼 추가 (진행률 표시) |
+| `005_sabangnet_code.sql` | products.sabangnet_code (사방넷 ERP 상품코드, 선택 필드) + 부분 인덱스. UNIQUE는 걸지 않고 앱 레이어에서 중복 확인 |
 
 ### 3. 설치 및 실행
 
@@ -190,4 +191,5 @@ supabase/migrations/
   002_collect_requests.sql
   003_brightdata_usage.sql
   004_collect_requests_progress.sql
+  005_sabangnet_code.sql
 ```
