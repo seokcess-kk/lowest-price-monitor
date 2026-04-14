@@ -24,7 +24,7 @@ export async function scrapeNaver(
   const zone = process.env.BRIGHTDATA_ZONE;
 
   if (token && zone) {
-    const result = await tryWebUnlocker(url, token, zone);
+    const result = await tryWebUnlocker(url);
     if (result) return result;
     console.warn('[naver] Web Unlocker HTML 수신 후 가격 파싱 실패 — API 폴백 시도');
   } else {
@@ -46,11 +46,7 @@ export async function scrapeNaver(
 }
 
 /** Bright Data Web Unlocker로 카탈로그 HTML 받아 파싱 */
-async function tryWebUnlocker(
-  url: string,
-  _token: string,
-  _zone: string
-): Promise<ScrapeResult | null> {
+async function tryWebUnlocker(url: string): Promise<ScrapeResult | null> {
   const res = await callWebUnlocker({ channel: 'naver', url });
 
   if (!res.ok) {
