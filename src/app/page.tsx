@@ -134,31 +134,38 @@ export default function Home() {
   const isActive =
     collectStatus?.status === 'pending' || collectStatus?.status === 'running';
 
+  // 상품명 + 사방넷코드를 동시 검색하는 공통 매처
+  const matchSearch = (item: (typeof data)[number], q: string) => {
+    if (!q) return true;
+    const nameHit = item.product_name.toLowerCase().includes(q);
+    const codeHit = (item.sabangnet_code ?? '').toLowerCase().includes(q);
+    return nameHit || codeHit;
+  };
+
   // 검색 + 필터 적용
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return data.filter((item) => {
-      if (q && !item.product_name.toLowerCase().includes(q)) return false;
+      if (!matchSearch(item, q)) return false;
       if (filter === 'changed' && !hasAnyChange(item)) return false;
       if (filter === 'bigDrop' && !hasBigDrop(item)) return false;
       if (filter === 'failed' && !hasFailure(item)) return false;
       return true;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, search, filter]);
 
   // 필터별 카운트 (검색 적용 후 기준)
   const counts = useMemo(() => {
-    const base = data.filter((item) =>
-      search.trim()
-        ? item.product_name.toLowerCase().includes(search.trim().toLowerCase())
-        : true
-    );
+    const q = search.trim().toLowerCase();
+    const base = data.filter((item) => matchSearch(item, q));
     return {
       all: base.length,
       changed: base.filter(hasAnyChange).length,
       bigDrop: base.filter((i) => hasBigDrop(i)).length,
       failed: base.filter(hasFailure).length,
     } as const;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, search]);
 
   return (

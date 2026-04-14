@@ -17,9 +17,16 @@ interface DupResponse {
       kind: 'urlMatch' | 'nameSimilar' | 'sabangnetMatch';
       productId: string;
       productName: string;
+      matchedField?: 'coupang_url' | 'naver_url' | 'danawa_url' | 'sabangnet_code';
     }>;
   }>;
 }
+
+const FIELD_LABELS: Record<string, string> = {
+  coupang_url: '쿠팡 URL',
+  naver_url: '네이버 URL',
+  danawa_url: '다나와 URL',
+};
 
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
   const [name, setName] = useState(initialData?.name || '');
@@ -43,8 +50,12 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
         danawa_url: danawaUrl.trim() || null,
       };
 
-      // 사방넷코드가 입력된 경우만 충돌 체크 — 같은 코드가 다른 상품에 있으면 사용자 승인
-      if (payload.sabangnet_code) {
+      // URL 또는 사방넷코드 중복 확인
+      // - URL 중복: 동일 상품을 두 번 등록하는 것이므로 완전 차단
+      // - 사방넷코드 충돌: 다른 상품에 같은 ERP 코드가 있을 수 있음 → 사용자 승인 필요
+      const hasAnyUrl =
+        payload.coupang_url || payload.naver_url || payload.danawa_url;
+      if (payload.sabangnet_code || hasAnyUrl) {
         try {
           const res = await fetch('/api/products/check-duplicates', {
             method: 'POST',
@@ -55,6 +66,9 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
                   rowIndex: 0,
                   name: payload.name,
                   sabangnet_code: payload.sabangnet_code,
+                  coupang_url: payload.coupang_url,
+                  naver_url: payload.naver_url,
+                  danawa_url: payload.danawa_url,
                   excludeId: initialData?.id ?? null,
                 },
               ],
@@ -63,14 +77,58 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           if (res.ok) {
             const json: DupResponse = await res.json();
             const r = json.results?.[0];
+
+            // 1) URL 중복 차단 (여러 개일 수 있음)
+            const urlMatches = r?.duplicates.filter((d) => d.kind === 'urlMatch') ?? [];
+            if (urlMatches.length > 0) {
+              const lines = urlMatches
+                .map(
+                  (d) =>
+                    `· ${FIELD_LABELS[d.matchedField ?? ''] ?? d.matchedField}: "${d.productName}"`
+                )
+                .join('\n');
+              window.alert(
+                `다음 URL이 이미 다른 상품에 등록되어 있어 저장할 수 없습니다.\n\n${lines}\n\n해당 상품을 수정하거나, 다른 URL을 사용하세요.`
+              );
+              setLoading(false);
+              return;
+            }
+
+            // 2) 사방넷코드 충돌 — 사용자 승인 시 기존 상품의 코드를 지우고
+            //    현재 상품에만 재부여 (ownership 이전)
             if (r?.status === 'sabangnet_conflict') {
               const other = r.duplicates.find((d) => d.kind === 'sabangnetMatch');
               const ok = window.confirm(
-                `사방넷코드 "${payload.sabangnet_code}"가 이미 "${other?.productName ?? '다른 상품'}"에 등록되어 있습니다.\n\n그래도 이 상품에 같은 코드를 저장할까요?`
+                `사방넷코드 "${payload.sabangnet_code}"가 이미 "${other?.productName ?? '다른 상품'}"에 등록되어 있습니다.\n\n` +
+                  `승인하면 "${other?.productName ?? '해당 상품'}"의 사방넷코드를 제거하고 이 상품에 이전합니다.\n\n계속할까요?`
               );
               if (!ok) {
                 setLoading(false);
                 return;
+              }
+              // 기존 상품의 sabangnet_code를 null로 clear
+              if (other?.productId) {
+                try {
+                  const clearRes = await fetch(`/api/products/${other.productId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sabangnet_code: null }),
+                  });
+                  if (!clearRes.ok) {
+                    const body = await clearRes.json().catch(() => ({}));
+                    window.alert(
+                      `기존 상품의 사방넷코드 제거에 실패했습니다: ${body.error ?? clearRes.statusText}`
+                    );
+                    setLoading(false);
+                    return;
+                  }
+                } catch {
+                  window.alert(
+                    '기존 상품의 사방넷코드 제거 중 네트워크 오류가 발생했습니다. 다시 시도해주세요.'
+                  );
+                  setLoading(false);
+                  return;
+                }
               }
             }
           }
