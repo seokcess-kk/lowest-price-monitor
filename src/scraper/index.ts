@@ -69,10 +69,27 @@ export async function collectAll(
 
   const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
+  // bulk insert를 위해 누적
+  const priceRows: Array<{
+    product_id: string;
+    channel: Channel;
+    price: number;
+    store_name: string | null;
+    is_manual: boolean;
+  }> = [];
+  const errorRows: Array<{
+    product_id: string;
+    channel: Channel;
+    error_message: string;
+  }> = [];
+
   for (const product of products as Product[]) {
-    for (const channel of channels) {
+    // 한 상품의 3개 채널은 서로 다른 호스트이므로 동시에 호출
+    const channelTasks = channels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
-      if (!url) continue;
+      if (!url) {
+        return { product_id: product.id, channel, success: false, error: 'no_url' };
+      }
 
       const result: CollectResult = {
         product_id: product.id,
@@ -82,7 +99,6 @@ export async function collectAll(
 
       try {
         console.log(`[${channel}] ${product.name} 수집 중...`);
-
         const scraper = CHANNEL_SCRAPERS[channel];
         const scrapeResult = await scraper(url, product.name);
 
@@ -90,27 +106,17 @@ export async function collectAll(
           result.success = true;
           result.price = scrapeResult.price;
           result.store_name = scrapeResult.storeName;
-
-          const { error: insertError } = await supabase
-            .from('price_logs')
-            .insert({
-              product_id: product.id,
-              channel,
-              price: scrapeResult.price,
-              store_name: scrapeResult.storeName,
-              is_manual: isManual,
-            });
-
-          if (insertError) {
-            result.success = false;
-            result.error = `DB 저장 실패: ${insertError.message}`;
-            errors.push(`[${channel}] ${product.name}: ${result.error}`);
-          }
+          priceRows.push({
+            product_id: product.id,
+            channel,
+            price: scrapeResult.price,
+            store_name: scrapeResult.storeName,
+            is_manual: isManual,
+          });
         } else {
           result.error = '가격 추출 실패';
           errors.push(`[${channel}] ${product.name}: 가격 추출 실패`);
-
-          await supabase.from('scrape_errors').insert({
+          errorRows.push({
             product_id: product.id,
             channel,
             error_message: '가격 추출 실패',
@@ -120,22 +126,45 @@ export async function collectAll(
         const message = error instanceof Error ? error.message : String(error);
         result.error = message;
         errors.push(`[${channel}] ${product.name}: ${message}`);
-
-        await supabase
-          .from('scrape_errors')
-          .insert({
-            product_id: product.id,
-            channel,
-            error_message: message,
-          })
-          .then(
-            () => {},
-            () => {}
-          );
+        errorRows.push({
+          product_id: product.id,
+          channel,
+          error_message: message,
+        });
       }
+      return result;
+    });
 
-      results.push(result);
-      await randomDelay();
+    const productResults = await Promise.all(channelTasks);
+    for (const r of productResults) {
+      if (r.error === 'no_url') continue; // URL 없음은 결과에서 제외
+      results.push(r);
+    }
+
+    // 상품 간에는 호스트 부담을 줄이려 딜레이 유지
+    await randomDelay();
+  }
+
+  // bulk insert — 라운드트립 최소화
+  if (priceRows.length > 0) {
+    const { error: insertError } = await supabase.from('price_logs').insert(priceRows);
+    if (insertError) {
+      const message = `price_logs bulk insert 실패: ${insertError.message}`;
+      console.error(message);
+      errors.push(message);
+      // 저장 실패 시 success로 집계되지 않도록 모두 실패 처리
+      for (const r of results) {
+        if (r.success) {
+          r.success = false;
+          r.error = message;
+        }
+      }
+    }
+  }
+  if (errorRows.length > 0) {
+    const { error: errInsertError } = await supabase.from('scrape_errors').insert(errorRows);
+    if (errInsertError) {
+      console.error(`scrape_errors bulk insert 실패: ${errInsertError.message}`);
     }
   }
 
