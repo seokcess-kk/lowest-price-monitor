@@ -29,7 +29,7 @@ export async function GET() {
 
     const productIds = products.map((p) => p.id);
 
-    // 오늘과 어제의 가격 로그 조회
+    // 오늘과 어제의 가격 로그 조회 (collected_at desc로 같은 채널 첫 항목이 최신)
     const { data: logs, error: logError } = await supabase
       .from('price_logs')
       .select('*')
@@ -44,37 +44,47 @@ export async function GET() {
 
     const channels: Channel[] = ['coupang', 'naver', 'danawa'];
 
-    // 연속 실패 경고 조회: 최근 scrape_errors에서 상품×채널별 연속 실패 카운트
+    // logs를 (productId, channel)로 한 번에 인덱싱 — 이후 모든 lookup이 O(1)
+    type LogRow = NonNullable<typeof logs>[number];
+    const logIndex = new Map<string, LogRow[]>();
+    for (const log of logs ?? []) {
+      const key = `${log.product_id}:${log.channel}`;
+      const arr = logIndex.get(key);
+      if (arr) arr.push(log);
+      else logIndex.set(key, [log]);
+    }
+
+    // 연속 실패 경고 조회: 최근 7일 + 최대 500건으로 제한 (누적 증가 방지)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: recentErrors } = await supabase
       .from('scrape_errors')
       .select('product_id, channel, created_at')
       .in('product_id', productIds)
-      .order('created_at', { ascending: false });
+      .gte('created_at', sevenDaysAgo)
+      .order('created_at', { ascending: false })
+      .limit(500);
 
-    // 상품×채널별 연속 실패 카운트 계산
+    // 상품×채널별 연속 실패 카운트 계산 (logIndex를 활용해 N+1 제거)
     const failureMap = new Map<string, number>();
     if (recentErrors) {
-      // 상품×채널별로 그룹핑
       const grouped = new Map<string, string[]>();
       for (const err of recentErrors) {
         const key = `${err.product_id}:${err.channel}`;
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(err.created_at as string);
+        const arr = grouped.get(key);
+        if (arr) arr.push(err.created_at as string);
+        else grouped.set(key, [err.created_at as string]);
       }
 
       for (const [key, timestamps] of grouped) {
-        const [productId, channel] = key.split(':');
-        // 해당 상품×채널의 가장 최근 성공 수집 시각 조회
-        const latestSuccess = (logs || []).find(
-          (l) => l.product_id === productId && l.channel === channel
-        );
+        // logs는 collected_at desc 정렬이라 [0]이 최신 성공 시각
+        const latestSuccess = logIndex.get(key)?.[0];
         const latestSuccessTime = latestSuccess
           ? new Date(latestSuccess.collected_at).getTime()
           : 0;
-        // 최근 성공 이후의 에러만 카운트
-        const consecutiveErrors = timestamps.filter(
-          (t) => new Date(t).getTime() > latestSuccessTime
-        ).length;
+        let consecutiveErrors = 0;
+        for (const t of timestamps) {
+          if (new Date(t).getTime() > latestSuccessTime) consecutiveErrors++;
+        }
         if (consecutiveErrors >= 3) {
           failureMap.set(key, consecutiveErrors);
         }
@@ -82,15 +92,18 @@ export async function GET() {
     }
 
     const result: PriceWithChange[] = products.map((product) => {
-      const productLogs = (logs || []).filter((l) => l.product_id === product.id);
-
       const prices: ChannelPrice[] = channels.map((channel) => {
-        const channelLogs = productLogs.filter((l) => l.channel === channel);
+        const channelLogs = logIndex.get(`${product.id}:${channel}`) ?? [];
 
-        // 오늘 최신
-        const todayLog = channelLogs.find((l) => l.collected_at.startsWith(todayStr));
-        // 어제 최신
-        const yesterdayLog = channelLogs.find((l) => l.collected_at.startsWith(yesterdayStr));
+        // 오늘/어제 최신을 한 번의 순회로
+        let todayLog: LogRow | undefined;
+        let yesterdayLog: LogRow | undefined;
+        for (const l of channelLogs) {
+          if (!todayLog && l.collected_at.startsWith(todayStr)) todayLog = l;
+          else if (!yesterdayLog && l.collected_at.startsWith(yesterdayStr))
+            yesterdayLog = l;
+          if (todayLog && yesterdayLog) break;
+        }
 
         let change: number | null = null;
         if (todayLog && yesterdayLog) {
