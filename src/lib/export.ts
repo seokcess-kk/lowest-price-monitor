@@ -29,6 +29,13 @@ export function exportToExcel(data: ExportRow[], filename: string): void {
   }));
 
   const ws = XLSX.utils.json_to_sheet(wsData);
+  ws['!cols'] = [
+    { wpx: 85 },  // 날짜
+    { wpx: 375 }, // 상품명
+    { wpx: 75 },  // 채널
+    { wpx: 75 },  // 가격
+    { wpx: 150 }, // 스토어명
+  ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
   XLSX.writeFile(wb, filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`);
