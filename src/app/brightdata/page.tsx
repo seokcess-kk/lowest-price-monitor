@@ -1,6 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
+import { useToast } from '@/components/Toast';
+import { KpiCardSkeleton, Skeleton } from '@/components/Skeleton';
+import Sparkline from '@/components/Sparkline';
 
 interface Bucket {
   total: number;
@@ -49,11 +52,25 @@ function formatNumber(n: number): string {
 }
 
 export default function BrightDataPage() {
+  const toast = useToast();
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [sync, setSync] = useState<SyncResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 월말 예상 호출 수 (현재까지의 평균 일일 호출 수 × 이번 달 일수)
+  const projected = useMemo(() => {
+    if (!usage) return null;
+    const now = new Date();
+    const currentDay = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    if (currentDay < 1) return null;
+    const ratePerDay = usage.month.total / currentDay;
+    const projectedTotal = Math.round(ratePerDay * daysInMonth);
+    const projectedBytes = Math.round((usage.month.bytes / currentDay) * daysInMonth);
+    return { total: projectedTotal, bytes: projectedBytes, daysInMonth, currentDay };
+  }, [usage]);
 
   const load = async () => {
     setLoading(true);
@@ -83,18 +100,36 @@ export default function BrightDataPage() {
       const res = await fetch('/api/brightdata/sync', { method: 'POST', body: '{}' });
       const body = await res.json();
       if (!res.ok) {
-        alert(`동기화 실패: ${body.error}`);
+        toast.error(`동기화 실패: ${body.error}`);
         return;
       }
+      toast.success('Bright Data 공식 통계 동기화 완료');
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : '동기화 실패');
+      toast.error(err instanceof Error ? err.message : '동기화 실패');
     } finally {
       setSyncing(false);
     }
   };
 
-  if (loading) return <div className="text-gray-500">로딩 중...</div>;
+  if (loading) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-6">Bright Data 사용량</h1>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <KpiCardSkeleton />
+          <KpiCardSkeleton />
+          <KpiCardSkeleton />
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border p-6 mb-6 space-y-2">
+          <Skeleton className="h-4 w-32 mb-3" />
+          <Skeleton className="h-8" />
+          <Skeleton className="h-8" />
+          <Skeleton className="h-8" />
+        </div>
+      </div>
+    );
+  }
   if (error) return <div className="text-red-600">{error}</div>;
   if (!usage) return null;
 
@@ -102,10 +137,40 @@ export default function BrightDataPage() {
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Bright Data 사용량</h1>
 
-      {/* 오늘/이번 달 KPI */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      {/* 오늘/이번 달/예상 KPI */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <BucketCard title="오늘 (KST)" bucket={usage.today} />
         <BucketCard title="이번 달 (KST)" bucket={usage.month} />
+        {projected && (
+          <div className="bg-white rounded-lg shadow-sm border p-6">
+            <div className="text-sm text-gray-500 mb-2">월말 예상</div>
+            <div className="text-3xl font-bold text-gray-900 mb-3">
+              {formatNumber(projected.total)}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <div className="text-gray-500">예상 대역폭</div>
+                <div className="font-semibold text-gray-700">
+                  {formatBytes(projected.bytes)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-500">진행률</div>
+                <div className="font-semibold text-gray-700">
+                  {projected.currentDay}/{projected.daysInMonth}일
+                </div>
+              </div>
+            </div>
+            <div className="mt-2 w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-blue-500 h-1.5"
+                style={{
+                  width: `${Math.round((projected.currentDay / projected.daysInMonth) * 100)}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 채널별 분포 */}
@@ -145,7 +210,15 @@ export default function BrightDataPage() {
 
       {/* 일별 추이 */}
       <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">일별 추이 (최근 14일)</h2>
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h2 className="text-lg font-semibold text-gray-800">일별 추이 (최근 14일)</h2>
+          {usage.daily.length >= 2 && (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span>호출 수</span>
+              <Sparkline values={usage.daily.map((d) => d.total)} width={140} height={28} />
+            </div>
+          )}
+        </div>
         {usage.daily.length === 0 ? (
           <div className="text-sm text-gray-500">데이터 없음</div>
         ) : (

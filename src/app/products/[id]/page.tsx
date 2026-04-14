@@ -7,6 +7,7 @@ import { usePriceHistory } from '@/hooks/usePriceHistory';
 import { useProduct } from '@/hooks/useProduct';
 import PriceChart from '@/components/PriceChart';
 import PriceChangeIndicator from '@/components/PriceChangeIndicator';
+import { ChartSkeleton } from '@/components/Skeleton';
 import type { Channel, PriceLog } from '@/types/database';
 
 type Period = '7d' | '30d' | '90d' | 'all';
@@ -463,7 +464,7 @@ export default function ProductDetailPage() {
 
             <div className="p-4">
               {loading ? (
-                <div className="text-center py-12 text-gray-400">차트 로딩 중...</div>
+                <ChartSkeleton height={400} />
               ) : (
                 <PriceChart
                   data={data}

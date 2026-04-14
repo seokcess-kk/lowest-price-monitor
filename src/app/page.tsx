@@ -12,6 +12,7 @@ import FilterChips, { type ChangeFilter } from '@/components/FilterChips';
 import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
 import { hasAnyChange, hasBigDrop, hasFailure } from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
+import { KpiCardSkeleton, ProductCardSkeleton } from '@/components/Skeleton';
 
 interface CollectStatus {
   id?: string;
@@ -276,7 +277,20 @@ export default function Home() {
         </div>
       )}
 
-      {loading && <div className="text-center py-12 text-gray-500">로딩 중...</div>}
+      {loading && (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <KpiCardSkeleton key={i} />
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <ProductCardSkeleton key={i} />
+            ))}
+          </div>
+        </>
+      )}
 
       {error && <div className="text-center py-12 text-red-500">오류: {error}</div>}
 

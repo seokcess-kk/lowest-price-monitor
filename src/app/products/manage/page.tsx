@@ -6,6 +6,8 @@ import ProductForm from '@/components/ProductForm';
 import Modal from '@/components/Modal';
 import SearchInput from '@/components/SearchInput';
 import CsvImportModal from '@/components/CsvImportModal';
+import { ProductRowSkeleton } from '@/components/Skeleton';
+import { useToast } from '@/components/Toast';
 import type { Product, CreateProductInput, Channel } from '@/types/database';
 
 type StatusFilter = 'all' | 'active' | 'inactive';
@@ -27,6 +29,7 @@ const CHANNEL_LABELS: Record<Channel, string> = {
 const CHANNELS: Channel[] = ['coupang', 'naver', 'danawa'];
 
 export default function ManageProductsPage() {
+  const toast = useToast();
   const { products, loading, error, refetch } = useProducts(false);
 
   const [search, setSearch] = useState('');
@@ -132,10 +135,11 @@ export default function ManageProductsPage() {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const body = await res.json();
-      alert(body.error || '등록 실패');
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || '등록 실패');
       return;
     }
+    toast.success(`"${data.name}" 등록 완료`);
     setFormOpen(false);
     refetch();
   };
@@ -148,10 +152,11 @@ export default function ManageProductsPage() {
       body: JSON.stringify(data),
     });
     if (!res.ok) {
-      const body = await res.json();
-      alert(body.error || '수정 실패');
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || '수정 실패');
       return;
     }
+    toast.success(`"${data.name}" 수정 완료`);
     setEditingProduct(null);
     setFormOpen(false);
     refetch();
@@ -161,7 +166,7 @@ export default function ManageProductsPage() {
     setActionMenu(null);
     const res = await fetch(`/api/products/${id}/toggle`, { method: 'PATCH' });
     if (!res.ok) {
-      alert('토글 실패');
+      toast.error('활성 상태 전환 실패');
       return;
     }
     refetch();
@@ -171,7 +176,7 @@ export default function ManageProductsPage() {
     if (ids.length === 1) {
       const res = await fetch(`/api/products/${ids[0]}`, { method: 'DELETE' });
       if (!res.ok) {
-        alert('삭제 실패');
+        toast.error('삭제 실패');
         return;
       }
     } else {
@@ -181,10 +186,11 @@ export default function ManageProductsPage() {
         body: JSON.stringify({ ids, action: 'delete' }),
       });
       if (!res.ok) {
-        alert('일괄 삭제 실패');
+        toast.error('일괄 삭제 실패');
         return;
       }
     }
+    toast.success(`${ids.length}개 상품 삭제됨`);
     setConfirmDelete(null);
     setSelected(new Set());
     refetch();
@@ -199,9 +205,12 @@ export default function ManageProductsPage() {
       body: JSON.stringify({ ids, action }),
     });
     if (!res.ok) {
-      alert('일괄 작업 실패');
+      toast.error('일괄 작업 실패');
       return;
     }
+    toast.success(
+      `${ids.length}개 상품 ${action === 'activate' ? '활성화' : '비활성화'}됨`
+    );
     setSelected(new Set());
     refetch();
   };
@@ -310,7 +319,11 @@ export default function ManageProductsPage() {
       {/* 목록 — 모바일 카드 리스트 */}
       <div className="md:hidden mb-20">
         {loading && (
-          <div className="text-center py-12 text-gray-500">로딩 중...</div>
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <ProductRowSkeleton key={i} />
+            ))}
+          </div>
         )}
         {error && (
           <div className="text-center py-12 text-red-500">오류: {error}</div>
@@ -353,7 +366,11 @@ export default function ManageProductsPage() {
       {/* 목록 — 데스크톱 테이블 */}
       <div className="hidden md:block bg-white rounded-lg shadow-sm border border-gray-200">
         {loading && (
-          <div className="text-center py-12 text-gray-500">로딩 중...</div>
+          <div className="p-4 space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <ProductRowSkeleton key={i} />
+            ))}
+          </div>
         )}
         {error && (
           <div className="text-center py-12 text-red-500">오류: {error}</div>
