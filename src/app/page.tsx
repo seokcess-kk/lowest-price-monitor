@@ -10,6 +10,7 @@ import SearchInput from '@/components/SearchInput';
 import FilterChips, { type ChangeFilter } from '@/components/FilterChips';
 import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
 import { hasAnyChange, hasBigDrop, hasFailure } from '@/lib/price-utils';
+import { exportSnapshotToExcel } from '@/lib/export';
 
 interface CollectStatus {
   id?: string;
@@ -19,6 +20,8 @@ interface CollectStatus {
   error_message?: string;
   created_at?: string;
   completed_at?: string;
+  progress_done?: number;
+  progress_total?: number;
 }
 
 export default function Home() {
@@ -27,7 +30,7 @@ export default function Home() {
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ChangeFilter>('all');
-  const [view, setView] = useState<ViewMode>('table');
+  const [view, setView] = useState<ViewMode>('card');
 
   const [collecting, setCollecting] = useState(false);
   const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null);
@@ -77,19 +80,50 @@ export default function Home() {
     }
   };
 
+  // 마운트 시 진행 중인 수집이 있으면 자동으로 폴링 재시작 (탭 이동 후 복귀 대응)
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/collect')
+      .then((res) => res.json())
+      .then((data: CollectStatus) => {
+        if (cancelled) return;
+        if (data && (data.status === 'pending' || data.status === 'running')) {
+          setCollectStatus(data);
+          if (!pollRef.current) {
+            pollRef.current = setInterval(pollStatus, 3000);
+          }
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pollStatus]);
+
   useEffect(() => {
     return () => stopPolling();
   }, [stopPolling]);
+
+  const progressDone = collectStatus?.progress_done ?? 0;
+  const progressTotal = collectStatus?.progress_total ?? 0;
+  const progressPct =
+    progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0;
 
   const statusMessage = () => {
     if (!collectStatus) return null;
     switch (collectStatus.status) {
       case 'pending':
-        return '수집 대기 중... 로컬 수집기가 요청을 처리합니다.';
+        return progressTotal > 0
+          ? `수집 대기 중... (${progressDone}/${progressTotal} 상품)`
+          : '수집 대기 중... GitHub Actions 시작을 기다리는 중';
       case 'running':
-        return '수집 진행 중...';
+        return progressTotal > 0
+          ? `수집 진행 중... ${progressDone} / ${progressTotal} 상품 완료`
+          : '수집 진행 중...';
       case 'completed':
-        return `수집 완료: ${collectStatus.result_success}건 성공, ${collectStatus.result_failed}건 실패`;
+        return `수집 완료: ${collectStatus.result_success ?? 0}건 성공, ${collectStatus.result_failed ?? 0}건 실패`;
       case 'failed':
         return `수집 실패: ${collectStatus.error_message || '알 수 없는 오류'}`;
       default:
@@ -148,6 +182,20 @@ export default function Home() {
           >
             새로고침
           </button>
+          <button
+            onClick={() => {
+              if (filtered.length === 0) {
+                alert('내보낼 상품이 없습니다.');
+                return;
+              }
+              const today = new Date().toISOString().split('T')[0];
+              exportSnapshotToExcel(filtered, `현재최저가_${today}`);
+            }}
+            disabled={filtered.length === 0}
+            className="px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
+          >
+            Excel 내보내기
+          </button>
         </div>
       </div>
 
@@ -161,12 +209,25 @@ export default function Home() {
                 : 'bg-blue-50 border-blue-200 text-blue-700'
           }`}
         >
-          <div className="flex items-center gap-2">
-            {isActive && (
-              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {isActive && (
+                <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              )}
+              <span>{statusMessage()}</span>
+            </div>
+            {isActive && progressTotal > 0 && (
+              <span className="text-xs text-blue-600 font-medium">{progressPct}%</span>
             )}
-            <span>{statusMessage()}</span>
           </div>
+          {isActive && progressTotal > 0 && (
+            <div className="mt-2 w-full bg-blue-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-blue-500 h-1.5 transition-all duration-500"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
 
