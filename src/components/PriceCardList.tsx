@@ -107,6 +107,14 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                         <div className="text-gray-900 tabular-nums">
                           {cp.price.toLocaleString('ko-KR')}
                         </div>
+                        {ch !== 'coupang' && cp.store_name && (
+                          <div
+                            className="text-[9px] text-gray-500 truncate"
+                            title={cp.store_name}
+                          >
+                            {cp.store_name}
+                          </div>
+                        )}
                         {channelPct !== null && Math.abs(channelPct) > 0.05 && (
                           <div
                             className={`text-[10px] ${

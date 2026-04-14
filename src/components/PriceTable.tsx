@@ -189,6 +189,8 @@ interface RowGroupProps {
 function RowGroup({ item, cheapest, pct, isExpanded, onToggle, sparkline }: RowGroupProps) {
   const cheapestPrice = cheapest?.price ?? null;
   const cheapestChannelKey = cheapest?.channel ?? null;
+  const cheapestStoreName =
+    cheapest && cheapest.channel !== 'coupang' ? cheapest.store_name : null;
   const hasFailures = !!item.warnings && item.warnings.length > 0;
 
   return (
@@ -221,19 +223,29 @@ function RowGroup({ item, cheapest, pct, isExpanded, onToggle, sparkline }: RowG
         </td>
         <td className="px-4 py-3 text-right">
           {cheapestPrice !== null ? (
-            <div className="flex items-center justify-end gap-2">
-              {cheapestChannelKey && (
+            <div className="flex flex-col items-end gap-0.5">
+              <div className="flex items-center justify-end gap-2">
+                {cheapestChannelKey && (
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded text-white"
+                    style={{ backgroundColor: CHANNEL_COLORS[cheapestChannelKey] }}
+                    title={`${CHANNEL_LABELS[cheapestChannelKey]} 최저`}
+                  >
+                    👑 {CHANNEL_LABELS[cheapestChannelKey]}
+                  </span>
+                )}
+                <span className="font-semibold text-gray-900 tabular-nums">
+                  {cheapestPrice.toLocaleString('ko-KR')}원
+                </span>
+              </div>
+              {cheapestStoreName && (
                 <span
-                  className="text-[10px] font-bold px-1.5 py-0.5 rounded text-white"
-                  style={{ backgroundColor: CHANNEL_COLORS[cheapestChannelKey] }}
-                  title={`${CHANNEL_LABELS[cheapestChannelKey]} 최저`}
+                  className="text-[10px] text-gray-500 truncate max-w-[140px]"
+                  title={cheapestStoreName}
                 >
-                  👑 {CHANNEL_LABELS[cheapestChannelKey]}
+                  @ {cheapestStoreName}
                 </span>
               )}
-              <span className="font-semibold text-gray-900 tabular-nums">
-                {cheapestPrice.toLocaleString('ko-KR')}원
-              </span>
             </div>
           ) : (
             <span className="text-gray-400">-</span>
