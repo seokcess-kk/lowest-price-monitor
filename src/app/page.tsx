@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useLatestPrices } from '@/hooks/useLatestPrices';
 import { useSparklines } from '@/hooks/useSparklines';
+import { useLastCollected } from '@/hooks/useLastCollected';
 import PriceTable from '@/components/PriceTable';
 import PriceCardList from '@/components/PriceCardList';
 import SummaryCards from '@/components/SummaryCards';
@@ -24,9 +25,32 @@ interface CollectStatus {
   progress_total?: number;
 }
 
+/** 상대 시간 포맷 — 'N분 전' / 'N시간 전' / 'N일 전' + 절대 시간 보조 */
+function formatRelative(iso: string | null): { relative: string; absolute: string } | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60_000);
+  let relative: string;
+  if (min < 1) relative = '방금 전';
+  else if (min < 60) relative = `${min}분 전`;
+  else if (min < 60 * 24) relative = `${Math.floor(min / 60)}시간 전`;
+  else relative = `${Math.floor(min / (60 * 24))}일 전`;
+  const absolute = new Date(iso).toLocaleString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return { relative, absolute };
+}
+
 export default function Home() {
   const { data, loading, error, refetch } = useLatestPrices();
   const { data: sparklineMap } = useSparklines(7);
+  const { at: lastCollectedAt, refetch: refetchLastCollected } = useLastCollected();
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ChangeFilter>('all');
@@ -52,11 +76,12 @@ export default function Home() {
       if (data.status === 'completed' || data.status === 'failed') {
         stopPolling();
         refetch();
+        refetchLastCollected();
       }
     } catch {
       /* ignore */
     }
-  }, [refetch, stopPolling]);
+  }, [refetch, refetchLastCollected, stopPolling]);
 
   const handleCollect = async () => {
     setCollecting(true);
@@ -171,7 +196,20 @@ export default function Home() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">현재 최저가 요약</h1>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">현재 최저가 요약</h1>
+          {(() => {
+            const fmt = formatRelative(lastCollectedAt);
+            return fmt ? (
+              <span
+                className="text-xs text-gray-500"
+                title={`마지막 수집: ${fmt.absolute}`}
+              >
+                🕒 마지막 수집: {fmt.relative} · {fmt.absolute}
+              </span>
+            ) : null;
+          })()}
+        </div>
         <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
           <button
             onClick={handleCollect}

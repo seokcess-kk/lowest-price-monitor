@@ -82,7 +82,7 @@ npm run collect
 
 | 트리거 | 동작 |
 |--------|------|
-| **GitHub Actions cron** | 매일 09:00 KST (00:00 UTC) 자동 실행. `collect_requests` 큐 사용 안 함 |
+| **GitHub Actions cron** | 매일 08:00 KST (23:00 UTC) 자동 실행. `collect_requests` 큐 사용 안 함 |
 | **대시보드 "즉시 수집" 버튼** | `POST /api/collect` → `collect_requests` 큐 row 생성(`pending`) → GitHub Actions `workflow_dispatch` (`inputs.request_id` 전달) → 워크플로우가 시작 시 `running`으로, 매 상품 처리 후 `progress_done` 증가, 완료 시 `completed`로 row 업데이트 |
 
 ### 진행률 표시와 자동 폴링 복원
