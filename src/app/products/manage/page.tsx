@@ -220,18 +220,18 @@ export default function ManageProductsPage() {
 
   return (
     <div onClick={() => setActionMenu(null)}>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">상품 관리</h1>
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">상품 관리</h1>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <button
             onClick={() => setCsvOpen(true)}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 text-gray-700"
+            className="flex-1 sm:flex-none min-h-9 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 text-gray-700"
           >
             📥 Excel 일괄 등록
           </button>
           <button
             onClick={openCreateModal}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+            className="flex-1 sm:flex-none min-h-9 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
           >
             + 새 상품 등록
           </button>
@@ -263,24 +263,24 @@ export default function ManageProductsPage() {
         </div>
       </div>
 
-      {/* 일괄 작업 바 */}
+      {/* 일괄 작업 바 — 데스크톱: 인라인, 모바일: sticky bottom */}
       {selected.size > 0 && (
-        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+        <div className="md:mb-4 fixed md:static bottom-0 left-0 right-0 z-20 md:z-auto p-3 bg-blue-50 border-t md:border md:border-blue-200 border-blue-300 md:rounded-lg shadow-lg md:shadow-none flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm text-blue-800 font-medium">
             {selected.size}개 선택됨
           </span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => handleBulkAction('activate')}
-              className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+              className="min-h-9 px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700"
             >
-              일괄 활성화
+              활성화
             </button>
             <button
               onClick={() => handleBulkAction('deactivate')}
-              className="px-3 py-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
+              className="min-h-9 px-3 py-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
             >
-              일괄 비활성화
+              비활성화
             </button>
             <button
               onClick={() =>
@@ -289,22 +289,65 @@ export default function ManageProductsPage() {
                   label: `${selected.size}개 상품`,
                 })
               }
-              className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700"
+              className="min-h-9 px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700"
             >
-              일괄 삭제
+              삭제
             </button>
             <button
               onClick={() => setSelected(new Set())}
-              className="px-3 py-1.5 text-xs border border-gray-300 rounded hover:bg-white text-gray-700"
+              className="min-h-9 px-3 py-1.5 text-xs border border-gray-300 rounded bg-white hover:bg-gray-50 text-gray-700"
             >
-              선택 해제
+              해제
             </button>
           </div>
         </div>
       )}
 
-      {/* 목록 */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      {/* 목록 — 모바일 카드 리스트 */}
+      <div className="md:hidden mb-20">
+        {loading && (
+          <div className="text-center py-12 text-gray-500">로딩 중...</div>
+        )}
+        {error && (
+          <div className="text-center py-12 text-red-500">오류: {error}</div>
+        )}
+        {!loading && !error && filtered.length === 0 && (
+          <div className="bg-white rounded-lg border border-gray-200 text-center py-12 text-gray-400">
+            {products.length === 0
+              ? '등록된 상품이 없습니다.'
+              : '조건에 맞는 상품이 없습니다.'}
+          </div>
+        )}
+        {!loading && !error && filtered.length > 0 && (
+          <div className="space-y-2">
+            {filtered.map((product) => {
+              const isSelected = selected.has(product.id);
+              const isExpanded = expanded.has(product.id);
+              return (
+                <ProductCardMobile
+                  key={product.id}
+                  product={product}
+                  isSelected={isSelected}
+                  isExpanded={isExpanded}
+                  onToggleSelect={() => toggleSelect(product.id)}
+                  onToggleExpand={() => toggleExpand(product.id)}
+                  onEdit={() => openEditModal(product)}
+                  onToggleActive={() => handleToggleActive(product.id)}
+                  onDelete={() =>
+                    setConfirmDelete({
+                      ids: [product.id],
+                      label: product.name,
+                    })
+                  }
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 목록 — 데스크톱 테이블 */}
+      <div className="hidden md:block bg-white rounded-lg shadow-sm border border-gray-200">
         {loading && (
           <div className="text-center py-12 text-gray-500">로딩 중...</div>
         )}
@@ -664,5 +707,145 @@ function ProductRow({
         </tr>
       )}
     </>
+  );
+}
+
+interface ProductCardMobileProps {
+  product: Product;
+  isSelected: boolean;
+  isExpanded: boolean;
+  onToggleSelect: () => void;
+  onToggleExpand: () => void;
+  onEdit: () => void;
+  onToggleActive: () => void;
+  onDelete: () => void;
+}
+
+function ProductCardMobile({
+  product,
+  isSelected,
+  isExpanded,
+  onToggleSelect,
+  onToggleExpand,
+  onEdit,
+  onToggleActive,
+  onDelete,
+}: ProductCardMobileProps) {
+  return (
+    <div
+      className={`bg-white border rounded-lg shadow-sm transition-colors ${
+        isSelected ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200'
+      }`}
+    >
+      <div className="p-3">
+        <div className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggleSelect}
+            className="mt-1 w-4 h-4"
+            aria-label={`${product.name} 선택`}
+          />
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            className="flex-1 text-left min-w-0"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-gray-900 break-keep flex-1">
+                {product.name}
+              </span>
+              <span className="text-gray-400 text-xs shrink-0">
+                {isExpanded ? '▼' : '▶'}
+              </span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500">
+              <span className="inline-flex items-center gap-1">
+                {CHANNELS.map((ch) => {
+                  const has = !!product[`${ch}_url` as const];
+                  return (
+                    <span
+                      key={ch}
+                      title={`${CHANNEL_LABELS[ch]}: ${has ? '등록됨' : '미등록'}`}
+                      className="inline-block w-2 h-2 rounded-full"
+                      style={{
+                        backgroundColor: has ? CHANNEL_COLORS[ch] : '#e5e7eb',
+                      }}
+                    />
+                  );
+                })}
+              </span>
+              <span
+                className={`inline-block px-1.5 py-0.5 text-[11px] rounded-full ${
+                  product.is_active
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-500'
+                }`}
+              >
+                {product.is_active ? '활성' : '비활성'}
+              </span>
+              <span className="text-[11px]">
+                {new Date(product.created_at).toLocaleDateString('ko-KR')}
+              </span>
+            </div>
+          </button>
+        </div>
+
+        {isExpanded && (
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+            {CHANNELS.map((ch) => {
+              const url = product[`${ch}_url` as const];
+              return (
+                <div
+                  key={ch}
+                  className="flex items-center gap-2 text-xs"
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: CHANNEL_COLORS[ch] }}
+                  />
+                  <span className="text-gray-500 w-10 shrink-0">
+                    {CHANNEL_LABELS[ch]}
+                  </span>
+                  {url ? (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline truncate flex-1"
+                      title={url}
+                    >
+                      {url}
+                    </a>
+                  ) : (
+                    <span className="text-gray-300">미등록</span>
+                  )}
+                </div>
+              );
+            })}
+            <div className="pt-2 flex gap-2">
+              <button
+                onClick={onEdit}
+                className="flex-1 min-h-9 px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+              >
+                ✏ 수정
+              </button>
+              <button
+                onClick={onToggleActive}
+                className="flex-1 min-h-9 px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+              >
+                {product.is_active ? '🚫 비활성화' : '✅ 활성화'}
+              </button>
+              <button
+                onClick={onDelete}
+                className="flex-1 min-h-9 px-3 py-1.5 text-xs bg-red-50 border border-red-200 rounded text-red-600 hover:bg-red-100"
+              >
+                🗑 삭제
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

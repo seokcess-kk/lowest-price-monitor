@@ -208,7 +208,7 @@ export default function ProductDetailPage() {
   return (
     <div>
       {/* === A. 헤더 === */}
-      <div className="mb-6">
+      <div className="mb-4 sm:mb-6">
         <Link
           href="/"
           className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1 mb-2"
@@ -216,14 +216,14 @@ export default function ProductDetailPage() {
           ← 대시보드로
         </Link>
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-keep">
             {productLoading
               ? '로딩 중...'
               : (product?.name ?? '알 수 없는 상품')}
           </h1>
           <Link
             href="/products/manage"
-            className="px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+            className="min-h-9 inline-flex items-center px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
           >
             ✏ 상품 관리
           </Link>
@@ -232,11 +232,11 @@ export default function ProductDetailPage() {
         {/* 현재 최저가 + 채널별 인라인 가격 */}
         <div className="mt-4 bg-white border border-gray-200 rounded-lg p-4">
           {overall ? (
-            <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
               <div>
                 <div className="text-xs text-gray-500 mb-1">현재 최저가</div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-gray-900 tabular-nums">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-2xl sm:text-3xl font-bold text-gray-900 tabular-nums">
                     {overall.latest.price.toLocaleString('ko-KR')}원
                   </span>
                   {overall.previous && (
@@ -255,7 +255,7 @@ export default function ProductDetailPage() {
                 </div>
                 <div className="mt-1">
                   <span
-                    className="text-xs font-bold px-2 py-0.5 rounded text-white"
+                    className="text-xs font-bold px-2 py-0.5 rounded text-white inline-block"
                     style={{ backgroundColor: CHANNEL_COLORS[overall.channel] }}
                   >
                     👑 {CHANNEL_LABELS[overall.channel]}
@@ -265,14 +265,14 @@ export default function ProductDetailPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-3 gap-2 w-full lg:w-auto lg:flex lg:flex-wrap">
                 {CHANNELS.map((ch) => {
                   const entry = channelLatest[ch];
                   const url = product?.[`${ch}_url` as const];
                   const isCheapest = overall.channel === ch;
                   const inner = (
                     <div
-                      className={`px-3 py-2 rounded border min-w-[140px] ${
+                      className={`px-2 sm:px-3 py-2 rounded border lg:min-w-[140px] h-full ${
                         isCheapest
                           ? 'border-yellow-400 bg-yellow-50/40'
                           : 'border-gray-200 bg-white'
@@ -282,18 +282,18 @@ export default function ProductDetailPage() {
                         className="text-xs font-semibold flex items-center justify-between gap-1"
                         style={{ color: CHANNEL_COLORS[ch] }}
                       >
-                        <span>
+                        <span className="truncate">
                           ● {CHANNEL_LABELS[ch]}
                           {isCheapest && ' 👑'}
                         </span>
-                        {url && <span className="text-gray-400">↗</span>}
+                        {url && <span className="text-gray-400 shrink-0">↗</span>}
                       </div>
                       {entry ? (
-                        <div className="text-base font-bold text-gray-900 tabular-nums mt-0.5">
+                        <div className="text-sm sm:text-base font-bold text-gray-900 tabular-nums mt-0.5">
                           {entry.latest.price.toLocaleString('ko-KR')}원
                         </div>
                       ) : (
-                        <div className="text-sm text-gray-400 mt-0.5">데이터 없음</div>
+                        <div className="text-xs sm:text-sm text-gray-400 mt-0.5">없음</div>
                       )}
                     </div>
                   );
@@ -328,7 +328,7 @@ export default function ProductDetailPage() {
         <>
           {/* === B. KPI 카드 === */}
           {data.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3 mb-4 sm:mb-6">
               <KpiCard
                 label={`기간 내 최저가`}
                 value={
@@ -573,41 +573,41 @@ export default function ProductDetailPage() {
                 </div>
 
                 {/* 페이지네이션 */}
-                <div className="flex items-center justify-between p-3 border-t border-gray-100 text-xs text-gray-600">
-                  <span>
+                <div className="flex items-center justify-between p-3 border-t border-gray-100 text-xs text-gray-600 gap-2">
+                  <span className="truncate">
                     {(safePage - 1) * PAGE_SIZE + 1}–
                     {Math.min(safePage * PAGE_SIZE, filteredLogs.length)} /{' '}
                     {filteredLogs.length}건
                   </span>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => setLogPage(1)}
                       disabled={safePage === 1}
-                      className="px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
+                      className="hidden sm:inline-block min-h-8 px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
                     >
                       «
                     </button>
                     <button
                       onClick={() => setLogPage(safePage - 1)}
                       disabled={safePage === 1}
-                      className="px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
+                      className="min-h-8 px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
                     >
                       ‹
                     </button>
-                    <span className="px-3">
+                    <span className="px-2 sm:px-3 tabular-nums">
                       {safePage} / {totalPages}
                     </span>
                     <button
                       onClick={() => setLogPage(safePage + 1)}
                       disabled={safePage === totalPages}
-                      className="px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
+                      className="min-h-8 px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
                     >
                       ›
                     </button>
                     <button
                       onClick={() => setLogPage(totalPages)}
                       disabled={safePage === totalPages}
-                      className="px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
+                      className="hidden sm:inline-block min-h-8 px-2 py-1 border border-gray-300 rounded disabled:opacity-30 hover:bg-gray-50"
                     >
                       »
                     </button>
@@ -638,10 +638,10 @@ function KpiCard({ label, value, sub, tone = 'neutral' }: KpiCardProps) {
     down: 'bg-blue-50 border-blue-200 text-blue-700',
   }[tone];
   return (
-    <div className={`rounded-lg border p-3 ${toneClass}`}>
-      <div className="text-xs font-medium opacity-80">{label}</div>
-      <div className="text-lg font-bold mt-1 tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] opacity-70 mt-0.5">{sub}</div>}
+    <div className={`rounded-lg border p-2.5 sm:p-3 ${toneClass}`}>
+      <div className="text-[11px] sm:text-xs font-medium opacity-80">{label}</div>
+      <div className="text-base sm:text-lg font-bold mt-1 tabular-nums">{value}</div>
+      {sub && <div className="text-[10px] sm:text-[11px] opacity-70 mt-0.5">{sub}</div>}
     </div>
   );
 }

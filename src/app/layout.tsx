@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
@@ -18,6 +18,12 @@ export const metadata: Metadata = {
   description: "최저가 모니터링 대시보드",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -30,7 +36,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-gray-50">
         <Navigation />
-        <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-6">{children}</main>
+        <main className="flex-1 max-w-6xl mx-auto w-full px-3 sm:px-4 py-4 sm:py-6">{children}</main>
       </body>
     </html>
   );

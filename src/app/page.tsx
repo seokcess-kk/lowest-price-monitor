@@ -163,13 +163,13 @@ export default function Home() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">현재 최저가 요약</h1>
-        <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
+        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">현재 최저가 요약</h1>
+        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
           <button
             onClick={handleCollect}
             disabled={collecting || isActive}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+            className="flex-1 sm:flex-none min-h-9 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
           >
             {collecting ? '요청 중...' : isActive ? '수집 중...' : '즉시 수집'}
           </button>
@@ -178,7 +178,7 @@ export default function Home() {
               stopPolling();
               refetch();
             }}
-            className="px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm"
+            className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm"
           >
             새로고침
           </button>
@@ -192,7 +192,7 @@ export default function Home() {
               exportSnapshotToExcel(filtered, `현재최저가_${today}`);
             }}
             disabled={filtered.length === 0}
-            className="px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
+            className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
           >
             Excel 내보내기
           </button>
@@ -246,23 +246,37 @@ export default function Home() {
           <SummaryCards data={data} />
 
           <div className="mb-4 flex flex-wrap items-center gap-3 justify-between">
-            <div className="flex flex-wrap items-center gap-3 flex-1">
+            <div className="flex flex-wrap items-center gap-3 flex-1 w-full">
               <SearchInput value={search} onChange={setSearch} />
               <FilterChips value={filter} onChange={setFilter} counts={counts} />
             </div>
-            <ViewToggle value={view} onChange={setView} />
+            {/* 모바일에서는 카드 뷰만, 데스크톱에서는 토글 노출 */}
+            <div className="hidden md:block">
+              <ViewToggle value={view} onChange={setView} />
+            </div>
           </div>
 
           {filtered.length === 0 ? (
             <div className="bg-white rounded-lg shadow-sm border p-12 text-center text-gray-400">
               조건에 맞는 상품이 없습니다.
             </div>
-          ) : view === 'table' ? (
-            <div className="bg-white rounded-lg shadow-sm border">
-              <PriceTable data={filtered} sparklineMap={sparklineMap} />
-            </div>
           ) : (
-            <PriceCardList data={filtered} sparklineMap={sparklineMap} />
+            <>
+              {/* 모바일은 항상 카드 뷰 */}
+              <div className="md:hidden">
+                <PriceCardList data={filtered} sparklineMap={sparklineMap} />
+              </div>
+              {/* 데스크톱은 토글에 따라 */}
+              <div className="hidden md:block">
+                {view === 'table' ? (
+                  <div className="bg-white rounded-lg shadow-sm border">
+                    <PriceTable data={filtered} sparklineMap={sparklineMap} />
+                  </div>
+                ) : (
+                  <PriceCardList data={filtered} sparklineMap={sparklineMap} />
+                )}
+              </div>
+            </>
           )}
         </>
       )}

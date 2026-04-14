@@ -97,19 +97,19 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                 const inner = (
                   <>
                     <div
-                      className="font-semibold text-[10px]"
+                      className="font-semibold text-[11px]"
                       style={{ color: CHANNEL_COLORS[ch] }}
                     >
                       {CHANNEL_LABELS[ch]}
                     </div>
                     {cp && cp.price > 0 ? (
                       <>
-                        <div className="text-gray-900 tabular-nums">
+                        <div className="text-gray-900 tabular-nums text-xs">
                           {cp.price.toLocaleString('ko-KR')}
                         </div>
                         {ch !== 'coupang' && cp.store_name && (
                           <div
-                            className="text-[9px] text-gray-500 truncate"
+                            className="text-[10px] text-gray-500 truncate"
                             title={cp.store_name}
                           >
                             {cp.store_name}
@@ -132,7 +132,7 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
                   </>
                 );
 
-                const baseClass = `block p-1.5 rounded text-center transition-colors ${
+                const baseClass = `block p-2 min-h-[60px] rounded text-center transition-colors ${
                   isCheapest ? 'bg-yellow-50' : ''
                 }`;
 
