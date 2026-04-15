@@ -13,6 +13,7 @@ import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
 import { hasAnyChange, hasBigDrop, hasFailure } from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
 import { KpiCardSkeleton, ProductCardSkeleton } from '@/components/Skeleton';
+import { useToast } from '@/components/Toast';
 
 interface CollectStatus {
   id?: string;
@@ -60,6 +61,8 @@ export default function Home() {
   const [collecting, setCollecting] = useState(false);
   const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const [collectingIds, setCollectingIds] = useState<Set<string>>(new Set());
+  const toast = useToast();
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -159,6 +162,55 @@ export default function Home() {
 
   const isActive =
     collectStatus?.status === 'pending' || collectStatus?.status === 'running';
+
+  const handleCollectProduct = useCallback(
+    async (productId: string) => {
+      if (isActive) {
+        toast.error('전체 수집이 진행 중입니다.');
+        return;
+      }
+      if (collectingIds.has(productId)) return;
+
+      setCollectingIds((prev) => {
+        const next = new Set(prev);
+        next.add(productId);
+        return next;
+      });
+      try {
+        const res = await fetch(`/api/collect/product/${productId}`, {
+          method: 'POST',
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          toast.error(body.error || '수집 요청 실패');
+          return;
+        }
+        const successCount = body.success ?? 0;
+        const failedCount = body.failed ?? 0;
+        if (successCount > 0 && failedCount === 0) {
+          toast.success(`수집 완료: ${successCount}건 성공`);
+        } else if (successCount > 0) {
+          toast.show(
+            `수집 완료: ${successCount}건 성공, ${failedCount}건 실패`,
+            'info'
+          );
+        } else {
+          toast.error(`수집 실패: 0건 성공, ${failedCount}건 실패`);
+        }
+        refetch();
+        refetchLastCollected();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : '수집 요청 중 오류');
+      } finally {
+        setCollectingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+      }
+    },
+    [isActive, collectingIds, toast, refetch, refetchLastCollected]
+  );
 
   // 상품명 + 사방넷코드를 동시 검색하는 공통 매처
   const matchSearch = (item: (typeof data)[number], q: string) => {
@@ -323,16 +375,34 @@ export default function Home() {
             <>
               {/* 모바일은 항상 카드 뷰 */}
               <div className="md:hidden">
-                <PriceCardList data={filtered} sparklineMap={sparklineMap} />
+                <PriceCardList
+                  data={filtered}
+                  sparklineMap={sparklineMap}
+                  collectingIds={collectingIds}
+                  globalCollecting={isActive}
+                  onCollectProduct={handleCollectProduct}
+                />
               </div>
               {/* 데스크톱은 토글에 따라 */}
               <div className="hidden md:block">
                 {view === 'table' ? (
                   <div className="bg-white rounded-lg shadow-sm border">
-                    <PriceTable data={filtered} sparklineMap={sparklineMap} />
+                    <PriceTable
+                      data={filtered}
+                      sparklineMap={sparklineMap}
+                      collectingIds={collectingIds}
+                      globalCollecting={isActive}
+                      onCollectProduct={handleCollectProduct}
+                    />
                   </div>
                 ) : (
-                  <PriceCardList data={filtered} sparklineMap={sparklineMap} />
+                  <PriceCardList
+                  data={filtered}
+                  sparklineMap={sparklineMap}
+                  collectingIds={collectingIds}
+                  globalCollecting={isActive}
+                  onCollectProduct={handleCollectProduct}
+                />
                 )}
               </div>
             </>

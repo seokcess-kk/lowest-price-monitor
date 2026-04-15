@@ -26,10 +26,11 @@ export async function POST() {
 
     const supabase = createServiceClient();
 
-    // 진행 중 요청 중복 차단
+    // 진행 중 전역 요청 중복 차단 (상품별 요청은 무시)
     const { data: existing } = await supabase
       .from('collect_requests')
       .select('id, status')
+      .is('product_id', null)
       .in('status', ['pending', 'running'])
       .limit(1);
 
@@ -40,12 +41,13 @@ export async function POST() {
       );
     }
 
-    // Rate limit: 최근 60초 내에 새로 생성된 요청이 있으면 거절
+    // Rate limit: 최근 60초 내에 새로 생성된 전역 요청이 있으면 거절
     // (완료된 것도 포함 — 너무 잦은 연속 트리거 방지)
     const sixtySecAgo = new Date(Date.now() - 60_000).toISOString();
     const { data: recent } = await supabase
       .from('collect_requests')
       .select('id, created_at')
+      .is('product_id', null)
       .gte('created_at', sixtySecAgo)
       .limit(1);
 
@@ -130,6 +132,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from('collect_requests')
       .select('*')
+      .is('product_id', null)
       .order('created_at', { ascending: false })
       .limit(1)
       .single();

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import type { PriceWithChange, Channel } from '@/types/database';
 import PriceChangeIndicator from './PriceChangeIndicator';
 import Sparkline from './Sparkline';
+import CollectProductButton from './CollectProductButton';
 import {
   cheapestChannel,
   changePercent,
@@ -13,6 +14,9 @@ import {
 interface PriceCardListProps {
   data: PriceWithChange[];
   sparklineMap?: Record<string, number[]>;
+  collectingIds?: Set<string>;
+  globalCollecting?: boolean;
+  onCollectProduct?: (id: string) => void;
 }
 
 const CHANNEL_LABELS: Record<Channel, string> = {
@@ -29,7 +33,13 @@ const CHANNEL_COLORS: Record<Channel, string> = {
 
 const CHANNELS: Channel[] = ['coupang', 'naver', 'danawa'];
 
-export default function PriceCardList({ data, sparklineMap }: PriceCardListProps) {
+export default function PriceCardList({
+  data,
+  sparklineMap,
+  collectingIds,
+  globalCollecting,
+  onCollectProduct,
+}: PriceCardListProps) {
   if (data.length === 0) {
     return (
       <div className="p-12 text-center text-gray-400">표시할 상품이 없습니다.</div>
@@ -56,11 +66,22 @@ export default function PriceCardList({ data, sparklineMap }: PriceCardListProps
               >
                 {item.product_name}
               </Link>
-              {failureCount > 0 && (
-                <span className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 shrink-0">
-                  ⚠ {failureCount}
-                </span>
-              )}
+              <div className="flex items-center gap-1 shrink-0">
+                {failureCount > 0 && (
+                  <span className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5">
+                    ⚠ {failureCount}
+                  </span>
+                )}
+                {onCollectProduct && (
+                  <CollectProductButton
+                    productId={item.product_id}
+                    collecting={collectingIds?.has(item.product_id) ?? false}
+                    disabled={globalCollecting ?? false}
+                    onClick={onCollectProduct}
+                    size="sm"
+                  />
+                )}
+              </div>
             </div>
 
             <div className="flex items-end justify-between mb-3">

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import type { PriceWithChange, Channel } from '@/types/database';
 import PriceChangeIndicator from './PriceChangeIndicator';
 import Sparkline from './Sparkline';
+import CollectProductButton from './CollectProductButton';
 import {
   cheapestChannel,
   changePercent,
@@ -14,6 +15,9 @@ import {
 interface PriceTableProps {
   data: PriceWithChange[];
   sparklineMap?: Record<string, number[]>;
+  collectingIds?: Set<string>;
+  globalCollecting?: boolean;
+  onCollectProduct?: (id: string) => void;
 }
 
 const CHANNEL_LABELS: Record<Channel, string> = {
@@ -33,7 +37,13 @@ const CHANNELS: Channel[] = ['coupang', 'naver', 'danawa'];
 type SortKey = 'name' | 'cheapest' | 'changePct';
 type SortDir = 'asc' | 'desc';
 
-export default function PriceTable({ data, sparklineMap }: PriceTableProps) {
+export default function PriceTable({
+  data,
+  sparklineMap,
+  collectingIds,
+  globalCollecting,
+  onCollectProduct,
+}: PriceTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -110,7 +120,9 @@ export default function PriceTable({ data, sparklineMap }: PriceTableProps) {
             <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">
               7일 추이
             </th>
-            <th className="w-12"></th>
+            <th className="px-2 py-3 text-center text-sm font-semibold text-gray-700 w-12">
+              수집
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -129,6 +141,9 @@ export default function PriceTable({ data, sparklineMap }: PriceTableProps) {
                 isExpanded={isExpanded}
                 onToggle={() => toggleRow(item.product_id)}
                 sparkline={sparkline}
+                collecting={collectingIds?.has(item.product_id) ?? false}
+                globalCollecting={globalCollecting ?? false}
+                onCollectProduct={onCollectProduct}
               />
             );
           })}
@@ -184,9 +199,22 @@ interface RowGroupProps {
   isExpanded: boolean;
   onToggle: () => void;
   sparkline?: number[];
+  collecting: boolean;
+  globalCollecting: boolean;
+  onCollectProduct?: (id: string) => void;
 }
 
-function RowGroup({ item, cheapest, pct, isExpanded, onToggle, sparkline }: RowGroupProps) {
+function RowGroup({
+  item,
+  cheapest,
+  pct,
+  isExpanded,
+  onToggle,
+  sparkline,
+  collecting,
+  globalCollecting,
+  onCollectProduct,
+}: RowGroupProps) {
   const cheapestPrice = cheapest?.price ?? null;
   const cheapestChannelKey = cheapest?.channel ?? null;
   const cheapestStoreName =
@@ -263,7 +291,16 @@ function RowGroup({ item, cheapest, pct, isExpanded, onToggle, sparkline }: RowG
             <Sparkline values={sparkline ?? []} width={80} height={24} />
           </div>
         </td>
-        <td className="px-2"></td>
+        <td className="px-2 py-3 text-center">
+          {onCollectProduct && (
+            <CollectProductButton
+              productId={item.product_id}
+              collecting={collecting}
+              disabled={globalCollecting}
+              onClick={onCollectProduct}
+            />
+          )}
+        </td>
       </tr>
       {isExpanded && (
         <tr className="bg-gray-50/50 border-b">

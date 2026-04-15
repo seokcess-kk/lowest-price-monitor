@@ -50,19 +50,22 @@ interface CollectSummary {
 export async function collectAll(
   options?: {
     isManual?: boolean;
+    productIds?: string[];
     onProgress?: (done: number, total: number) => void | Promise<void>;
   }
 ): Promise<CollectSummary> {
   const isManual = options?.isManual ?? false;
+  const productIds = options?.productIds;
   const onProgress = options?.onProgress;
   const supabase = createServiceClient();
   const results: CollectResult[] = [];
   const errors: string[] = [];
 
-  const { data: products, error: fetchError } = await supabase
-    .from('products')
-    .select('*')
-    .eq('is_active', true);
+  let query = supabase.from('products').select('*').eq('is_active', true);
+  if (productIds && productIds.length > 0) {
+    query = query.in('id', productIds);
+  }
+  const { data: products, error: fetchError } = await query;
 
   if (fetchError) {
     throw new Error(`상품 목록 조회 실패: ${fetchError.message}`);
@@ -73,9 +76,44 @@ export async function collectAll(
     return { success: 0, failed: 0, errors: [] };
   }
 
-  console.log(`활성 상품 ${products.length}개 발견`);
+  // 전역 실행(productIds 미지정)에서는 현재 개별 수집 진행 중인 상품을 제외
+  // 개별/전역 동시 수집 시 중복 price_logs 방지
+  let filteredProducts = products as Product[];
+  if (!productIds) {
+    try {
+      const { data: runningProductReqs } = await supabase
+        .from('collect_requests')
+        .select('product_id')
+        .in('status', ['pending', 'running'])
+        .not('product_id', 'is', null);
+      const excludeIds = new Set(
+        (runningProductReqs ?? [])
+          .map((r) => r.product_id as string | null)
+          .filter((x): x is string => !!x)
+      );
+      if (excludeIds.size > 0) {
+        const before = filteredProducts.length;
+        filteredProducts = filteredProducts.filter((p) => !excludeIds.has(p.id));
+        const skipped = before - filteredProducts.length;
+        if (skipped > 0) {
+          console.log(
+            `[collectAll] 개별 수집 진행 중인 상품 ${skipped}개 제외 → ${filteredProducts.length}개 수집`
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('[collectAll] 개별 수집 진행 상품 조회 실패:', e);
+    }
+  }
 
-  const totalProducts = (products as Product[]).length;
+  if (filteredProducts.length === 0) {
+    console.log('수집할 상품이 없습니다 (모두 제외됨).');
+    return { success: 0, failed: 0, errors: [] };
+  }
+
+  console.log(`활성 상품 ${filteredProducts.length}개 발견`);
+
+  const totalProducts = filteredProducts.length;
   let doneProducts = 0;
   if (onProgress) {
     try {
@@ -89,13 +127,13 @@ export async function collectAll(
 
   // 이상치 감지용: 각 (productId, channel) → 가장 최근 수집가 lookup
   // 한 번의 쿼리로 전체 활성 상품의 직전 가격을 가져와 Map으로 인덱싱
-  const productIds = (products as Product[]).map((p) => p.id);
+  const baselineProductIds = filteredProducts.map((p) => p.id);
   const previousMap = new Map<string, number>(); // key: "productId:channel"
   try {
     const { data: recentLogs } = await supabase
       .from('price_logs')
       .select('product_id, channel, price, collected_at')
-      .in('product_id', productIds)
+      .in('product_id', baselineProductIds)
       .order('collected_at', { ascending: false })
       .limit(5000);
     for (const log of recentLogs ?? []) {
@@ -131,7 +169,7 @@ export async function collectAll(
     error_message: string;
   }> = [];
 
-  for (const product of products as Product[]) {
+  for (const product of filteredProducts) {
     // 한 상품의 3개 채널은 서로 다른 호스트이므로 동시에 호출
     const channelTasks = channels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
