@@ -45,6 +45,12 @@ export async function scrapeNaver(
   throw new Error('네이버 수집 실패 — Web Unlocker와 API 폴백 모두 실패');
 }
 
+/** URL에서 네이버 카탈로그 ID 추출 (예: /catalog/53668153183 → "53668153183") */
+function extractCatalogId(url: string): string | null {
+  const m = url.match(/\/catalog\/(\d+)/);
+  return m ? m[1] : null;
+}
+
 /** Bright Data Web Unlocker로 카탈로그 HTML 받아 파싱 */
 async function tryWebUnlocker(url: string): Promise<ScrapeResult | null> {
   const res = await callWebUnlocker({ channel: 'naver', url });
@@ -62,8 +68,10 @@ async function tryWebUnlocker(url: string): Promise<ScrapeResult | null> {
     return null;
   }
 
+  const catalogId = extractCatalogId(url);
+
   // 1순위: 렌더된 DOM의 최저가 판매처 행에서 가격+스토어명 페어링 추출
-  const domResult = parseFromDom(html);
+  const domResult = parseFromDom(html, catalogId);
   if (domResult) return domResult;
 
   // 2순위: SSR JSON 직렬화 필드에서 추출 (DOM 구조 변경 대비 폴백)
@@ -75,14 +83,31 @@ async function tryWebUnlocker(url: string): Promise<ScrapeResult | null> {
  * `product_is_lowest_price__` modifier가 붙은 행만 선택해
  * 같은 행의 판매처명(product_name__)과 가격(product_num__)을 함께 추출.
  *
+ * 광고 블록(PLA)과 연관 상품 카드가 같은 클래스 구조를 쓰므로 다음 기준으로 필터:
+ *   1. `data-shp-sti="ad"` 또는 'adcr.' 광고 링크 포함 블록 → 제외
+ *   2. catalogId가 주어지면, 블록의 `catalog_nv_mid`가 다른 카탈로그를
+ *      가리키면 제외 (광고주의 다른 카탈로그로 유도하는 경우 방어)
+ *
  * React CSS Modules 해시는 빌드마다 바뀔 수 있지만 접두사는 안정적.
  */
-function parseFromDom(html: string): ScrapeResult | null {
+function parseFromDom(html: string, catalogId: string | null): ScrapeResult | null {
   const parts = html.split(/class="product_seller_item__[^"]*"/);
   if (parts.length < 2) return null;
 
   for (const block of parts.slice(1)) {
     if (!block.includes('product_is_lowest_price__')) continue;
+
+    // 광고 블록 제외
+    if (/data-shp-sti=(?:"|&quot;)ad(?:"|&quot;)/.test(block)) continue;
+    if (block.includes('adcr.shopping.naver.com')) continue;
+
+    // 카탈로그 ID 불일치 블록 제외 (광고주의 다른 카탈로그)
+    if (catalogId) {
+      const blockCatalogMatch = block.match(
+        /catalog_nv_mid(?:"|&quot;)?,\s*(?:"|&quot;)?value(?:"|&quot;)?:(?:"|&quot;)?(\d+)/
+      );
+      if (blockCatalogMatch && blockCatalogMatch[1] !== catalogId) continue;
+    }
 
     const nameMatch = block.match(/class="product_name__[^"]*"[^>]*>([^<]+)</);
     const priceMatch = block.match(/class="product_num__[^"]*"[^>]*>([\d,]+)</);
