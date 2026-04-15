@@ -28,6 +28,48 @@ const FIELD_LABELS: Record<string, string> = {
   danawa_url: '다나와 URL',
 };
 
+// 채널별로 "동일 상품 페이지"로 해석되는 최소 파라미터만 남겨
+// DB·중복검사 키를 안정화한다. 검색·트래킹 컨텍스트는 모두 제거.
+function normalizeUrl(channel: 'coupang' | 'naver' | 'danawa', raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return trimmed;
+  }
+  const host = u.hostname.toLowerCase();
+
+  if (channel === 'danawa') {
+    if (!host.endsWith('danawa.com')) return trimmed;
+    const pcode = u.searchParams.get('pcode');
+    if (!pcode) return trimmed;
+    return `${u.origin}${u.pathname}?pcode=${pcode}`;
+  }
+
+  if (channel === 'coupang') {
+    if (!host.endsWith('coupang.com')) return trimmed;
+    // itemId/vendorItemId는 옵션·판매자 단위를 결정하므로 보존
+    const keep = ['itemId', 'vendorItemId'];
+    const params = new URLSearchParams();
+    for (const k of keep) {
+      const v = u.searchParams.get(k);
+      if (v) params.set(k, v);
+    }
+    const qs = params.toString();
+    return `${u.origin}${u.pathname}${qs ? `?${qs}` : ''}`;
+  }
+
+  if (channel === 'naver') {
+    if (!host.endsWith('naver.com')) return trimmed;
+    // 카탈로그/스마트스토어 모두 path가 식별자, 쿼리는 전부 검색·추적 컨텍스트
+    return `${u.origin}${u.pathname}`;
+  }
+
+  return trimmed;
+}
+
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
   const [name, setName] = useState(initialData?.name || '');
   const [sabangnetCode, setSabangnetCode] = useState(initialData?.sabangnet_code || '');
@@ -45,9 +87,9 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
       const payload: CreateProductInput = {
         name: name.trim(),
         sabangnet_code: sabangnetCode.trim() || null,
-        coupang_url: coupangUrl.trim() || null,
-        naver_url: naverUrl.trim() || null,
-        danawa_url: danawaUrl.trim() || null,
+        coupang_url: normalizeUrl('coupang', coupangUrl) || null,
+        naver_url: normalizeUrl('naver', naverUrl) || null,
+        danawa_url: normalizeUrl('danawa', danawaUrl) || null,
       };
 
       // URL 또는 사방넷코드 중복 확인
@@ -185,6 +227,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           type="url"
           value={coupangUrl}
           onChange={(e) => setCoupangUrl(e.target.value)}
+          onBlur={(e) => setCoupangUrl(normalizeUrl('coupang', e.target.value))}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://www.coupang.com/..."
         />
@@ -198,6 +241,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           type="url"
           value={naverUrl}
           onChange={(e) => setNaverUrl(e.target.value)}
+          onBlur={(e) => setNaverUrl(normalizeUrl('naver', e.target.value))}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://search.shopping.naver.com/..."
         />
@@ -211,6 +255,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           type="url"
           value={danawaUrl}
           onChange={(e) => setDanawaUrl(e.target.value)}
+          onBlur={(e) => setDanawaUrl(normalizeUrl('danawa', e.target.value))}
           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
           placeholder="https://prod.danawa.com/..."
         />
