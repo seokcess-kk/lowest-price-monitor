@@ -51,6 +51,16 @@ function formatNumber(n: number): string {
   return n.toLocaleString('ko-KR');
 }
 
+const WEB_UNLOCKER_CPM = 1.50;
+
+function calcCost(requests: number): number {
+  return (requests / 1000) * WEB_UNLOCKER_CPM;
+}
+
+function formatUsd(amount: number): string {
+  return `$${amount.toFixed(2)}`;
+}
+
 export default function BrightDataPage() {
   const toast = useToast();
   const [usage, setUsage] = useState<UsageResponse | null>(null);
@@ -69,7 +79,7 @@ export default function BrightDataPage() {
     const ratePerDay = usage.month.total / currentDay;
     const projectedTotal = Math.round(ratePerDay * daysInMonth);
     const projectedBytes = Math.round((usage.month.bytes / currentDay) * daysInMonth);
-    return { total: projectedTotal, bytes: projectedBytes, daysInMonth, currentDay };
+    return { total: projectedTotal, bytes: projectedBytes, daysInMonth, currentDay, cost: calcCost(projectedTotal) };
   }, [usage]);
 
   const load = async () => {
@@ -140,12 +150,16 @@ export default function BrightDataPage() {
       {/* 오늘/이번 달/예상 KPI */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <BucketCard title="오늘 (KST)" bucket={usage.today} />
-        <BucketCard title="이번 달 (KST)" bucket={usage.month} />
+        <BucketCard title="이번 달 (KST)" bucket={usage.month} cost={calcCost(usage.month.total)} />
         {projected && (
           <div className="bg-white rounded-lg shadow-sm border p-6">
             <div className="text-sm text-gray-500 mb-2">월말 예상</div>
-            <div className="text-3xl font-bold text-gray-900 mb-3">
+            <div className="text-3xl font-bold text-gray-900 mb-1">
               {formatNumber(projected.total)}
+            </div>
+            <div className="text-lg font-semibold text-blue-600 mb-3">
+              {formatUsd(projected.cost)}
+              <span className="text-xs text-gray-400 ml-1">예상 비용</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div>
@@ -262,7 +276,7 @@ export default function BrightDataPage() {
 
         {!sync || !sync.latest ? (
           <div className="text-sm text-gray-500">
-            아직 동기화된 스냅샷이 없습니다. <code>BRIGHTDATA_STATS_URL</code> 환경 변수 설정 후 동기화를 실행하세요.
+            아직 동기화된 스냅샷이 없습니다. &ldquo;지금 동기화&rdquo; 버튼을 눌러 Bright Data 공식 통계를 가져오세요.
           </div>
         ) : (
           <div className="space-y-1 text-sm">
@@ -278,9 +292,18 @@ export default function BrightDataPage() {
               <span className="font-semibold">
                 {sync.latest.request_count !== null ? formatNumber(sync.latest.request_count) : '—'}
               </span>
+              {sync.latest.request_count !== null && (
+                <span className="ml-2 text-blue-600 font-semibold">
+                  ({formatUsd(calcCost(sync.latest.request_count))})
+                </span>
+              )}
             </div>
             <div className="text-gray-700">
-              로컬 카운트: <span className="font-semibold">{formatNumber(sync.localCount ?? 0)}</span>
+              로컬 카운트:{' '}
+              <span className="font-semibold">{formatNumber(sync.localCount ?? 0)}</span>
+              <span className="ml-2 text-blue-600 font-semibold">
+                ({formatUsd(calcCost(sync.localCount ?? 0))})
+              </span>
             </div>
             {sync.drift !== null && (
               <div className={sync.drift !== 0 ? 'text-amber-700' : 'text-green-700'}>
@@ -303,12 +326,18 @@ export default function BrightDataPage() {
   );
 }
 
-function BucketCard({ title, bucket }: { title: string; bucket: Bucket }) {
+function BucketCard({ title, bucket, cost }: { title: string; bucket: Bucket; cost?: number }) {
   const failRate = bucket.total === 0 ? 0 : (bucket.failed / bucket.total) * 100;
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
       <div className="text-sm text-gray-500 mb-2">{title}</div>
-      <div className="text-3xl font-bold text-gray-900 mb-3">{formatNumber(bucket.total)}</div>
+      <div className={`text-3xl font-bold text-gray-900 ${cost !== undefined ? 'mb-1' : 'mb-3'}`}>{formatNumber(bucket.total)}</div>
+      {cost !== undefined && (
+        <div className="text-lg font-semibold text-blue-600 mb-3">
+          {formatUsd(cost)}
+          <span className="text-xs text-gray-400 ml-1">현재 비용</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
           <div className="text-gray-500">성공</div>
