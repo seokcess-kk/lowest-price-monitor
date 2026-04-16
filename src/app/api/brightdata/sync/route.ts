@@ -14,7 +14,7 @@ import { createServiceClient } from '@/lib/supabase';
 export async function POST(req: NextRequest) {
   try {
     const token = process.env.BRIGHTDATA_API_TOKEN;
-    const statsUrlTemplate = process.env.BRIGHTDATA_STATS_URL;
+    const zone = process.env.BRIGHTDATA_ZONE;
 
     if (!token) {
       return NextResponse.json(
@@ -22,12 +22,9 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (!statsUrlTemplate) {
+    if (!zone) {
       return NextResponse.json(
-        {
-          error:
-            'BRIGHTDATA_STATS_URL 미설정. Bright Data 콘솔에서 zone 통계 API URL을 확인 후 환경 변수에 등록하세요. 예: https://api.brightdata.com/zone/statistic?zone=ZONE&from={from}&to={to}',
-        },
+        { error: 'BRIGHTDATA_ZONE 미설정' },
         { status: 400 }
       );
     }
@@ -38,58 +35,52 @@ export async function POST(req: NextRequest) {
     const from = body.from || monthStart;
     const to = body.to || today;
 
-    // {from} {to} 토큰 치환 + 쿼리스트링 폴백
-    let statsUrl = statsUrlTemplate.replace('{from}', from).replace('{to}', to);
-    if (!statsUrl.includes('from=') && !statsUrl.includes('{from}')) {
-      const sep = statsUrl.includes('?') ? '&' : '?';
-      statsUrl = `${statsUrl}${sep}from=${from}&to=${to}`;
-    }
+    const headers = { Authorization: `Bearer ${token}` };
+    const qs = `from=${from}&to=${to}&zones=${zone}`;
 
-    const res = await fetch(statsUrl, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const [bwRes, reqRes] = await Promise.all([
+      fetch(`https://api.brightdata.com/domains/bw?${qs}`, { headers }),
+      fetch(`https://api.brightdata.com/domains/req?${qs}`, { headers }),
+    ]);
 
-    const text = await res.text();
-    if (!res.ok) {
+    const bwText = await bwRes.text();
+    const reqText = await reqRes.text();
+
+    if (!bwRes.ok) {
       return NextResponse.json(
-        { error: `Bright Data stats API ${res.status}: ${text.slice(0, 500)}` },
+        { error: `Bright Data bw API ${bwRes.status}: ${bwText.slice(0, 500)}` },
+        { status: 502 }
+      );
+    }
+    if (!reqRes.ok) {
+      return NextResponse.json(
+        { error: `Bright Data req API ${reqRes.status}: ${reqText.slice(0, 500)}` },
         { status: 502 }
       );
     }
 
-    let raw: unknown;
+    let bwRaw: unknown;
+    let reqRaw: unknown;
     try {
-      raw = JSON.parse(text);
+      bwRaw = JSON.parse(bwText);
+      reqRaw = JSON.parse(reqText);
     } catch {
       return NextResponse.json(
-        { error: '응답이 JSON이 아닙니다', preview: text.slice(0, 500) },
+        { error: '응답이 JSON이 아닙니다', bwPreview: bwText.slice(0, 300), reqPreview: reqText.slice(0, 300) },
         { status: 502 }
       );
     }
 
-    // best-effort 추출 — 응답 스키마가 다양하므로 여러 키 후보 시도
-    const requestCount = pickNumber(raw, [
-      'requests',
-      'request_count',
-      'total_requests',
-      'reqs',
-      'count',
-    ]);
-    const bandwidthBytes = pickNumber(raw, [
-      'bw',
-      'bandwidth',
-      'bytes',
-      'traffic_bytes',
-      'total_bytes',
-    ]);
+    const bandwidthBytes = sumAllNumbers(bwRaw);
+    const requestCount = sumAllNumbers(reqRaw);
 
     const supabase = createServiceClient();
     const { error: insertError } = await supabase.from('brightdata_stats_snapshots').insert({
       period_start: from,
       period_end: to,
-      request_count: requestCount,
-      bandwidth_bytes: bandwidthBytes,
-      raw_response: raw as object,
+      request_count: requestCount || null,
+      bandwidth_bytes: bandwidthBytes || null,
+      raw_response: { bw: bwRaw, req: reqRaw },
     });
 
     if (insertError) {
@@ -156,26 +147,18 @@ export async function GET() {
   }
 }
 
-function pickNumber(obj: unknown, keys: string[]): number | null {
-  if (!obj || typeof obj !== 'object') return null;
-  for (const key of keys) {
-    const found = deepFindNumber(obj as Record<string, unknown>, key);
-    if (found !== null) return found;
+/**
+ * /domains/bw, /domains/req 응답은 도메인별 수치 맵 또는 중첩 객체.
+ * 모든 숫자 리프를 합산해 전체 사용량을 구한다.
+ */
+function sumAllNumbers(val: unknown): number {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+  if (Array.isArray(val)) return val.reduce<number>((s, v) => s + sumAllNumbers(v), 0);
+  if (val && typeof val === 'object') {
+    return Object.values(val as Record<string, unknown>).reduce<number>(
+      (s, v) => s + sumAllNumbers(v),
+      0
+    );
   }
-  return null;
-}
-
-function deepFindNumber(obj: Record<string, unknown>, key: string): number | null {
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === key && typeof v === 'number') return v;
-    if (k === key && typeof v === 'string') {
-      const n = Number(v);
-      if (Number.isFinite(n)) return n;
-    }
-    if (v && typeof v === 'object') {
-      const nested = deepFindNumber(v as Record<string, unknown>, key);
-      if (nested !== null) return nested;
-    }
-  }
-  return null;
+  return 0;
 }
