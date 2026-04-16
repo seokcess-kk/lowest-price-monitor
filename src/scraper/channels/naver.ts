@@ -70,12 +70,47 @@ async function tryWebUnlocker(url: string): Promise<ScrapeResult | null> {
 
   const catalogId = extractCatalogId(url);
 
-  // 1순위: 렌더된 DOM의 최저가 판매처 행에서 가격+스토어명 페어링 추출
+  // 1순위: 카탈로그 요약 블록(catalog_summary_info)에서 직접 최저가/판매처 추출
+  const summaryResult = parseFromSummary(html);
+  if (summaryResult) return summaryResult;
+
+  // 2순위: 판매처 리스트의 최저가 행에서 가격+스토어명 페어링 추출
   const domResult = parseFromDom(html, catalogId);
   if (domResult) return domResult;
 
-  // 2순위: SSR JSON 직렬화 필드에서 추출 (DOM 구조 변경 대비 폴백)
+  // 3순위: SSR JSON 직렬화 필드에서 추출 (DOM 구조 변경 대비 폴백)
   return parseFromJsonFallback(html);
+}
+
+/**
+ * 카탈로그 페이지 상단 요약 블록에서 최저가와 판매처를 뽑는다.
+ *
+ *   <div id="catalog_summary_info" ...>
+ *     ...
+ *     <strong class="catalogLowestPrice_num__...">20,380</strong>원
+ *     ...
+ *     <span class="catalogLowestMall_name__...">11번가</span>
+ *
+ * 네이버가 직접 확정한 최저가/판매처라 판매처 리스트를 훑는 것보다
+ * 광고·카드할인·옵션가 혼입에 강하다.
+ */
+function parseFromSummary(html: string): ScrapeResult | null {
+  const summaryIdx = html.indexOf('id="catalog_summary_info"');
+  if (summaryIdx < 0) return null;
+
+  // 요약 블록 이후 영역(추천 판매처 직전까지)만 대상으로 좁힌다
+  const scopeEnd = html.indexOf('buyBoxProducts_recommend_product_area', summaryIdx);
+  const scope = html.slice(summaryIdx, scopeEnd > 0 ? scopeEnd : summaryIdx + 20000);
+
+  const priceMatch = scope.match(/class="catalogLowestPrice_num__[^"]*"[^>]*>([\d,]+)</);
+  if (!priceMatch) return null;
+  const price = parseInt(priceMatch[1].replace(/,/g, ''), 10);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  const mallMatch = scope.match(/class="catalogLowestMall_name__[^"]*"[^>]*>([^<]+)</);
+  const storeName = mallMatch ? mallMatch[1].trim() : null;
+
+  return { price, storeName };
 }
 
 /**
