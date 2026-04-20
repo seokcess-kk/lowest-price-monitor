@@ -30,10 +30,12 @@ export async function GET() {
     const productIds = products.map((p) => p.id);
 
     // 오늘과 어제의 가격 로그 조회 (collected_at desc로 같은 채널 첫 항목이 최신)
+    // is_suspicious=true는 검토 대기 상태이므로 대시보드 표시에서 제외
     const { data: logs, error: logError } = await supabase
       .from('price_logs')
       .select('*')
       .in('product_id', productIds)
+      .eq('is_suspicious', false)
       .gte('collected_at', yesterdayStr)
       .lte('collected_at', todayStr + 'T23:59:59.999Z')
       .order('collected_at', { ascending: false });

@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
       .from('price_logs')
       .select('product_id, price, collected_at')
       .in('product_id', productIds)
+      .eq('is_suspicious', false)
       .gte('collected_at', since.toISOString());
 
     if (logError) {

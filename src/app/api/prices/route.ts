@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'product_id는 필수입니다.' }, { status: 400 });
     }
 
+    const includeSuspicious = searchParams.get('include_suspicious') === 'true';
+
     const supabase = createServiceClient();
     let query = supabase
       .from('price_logs')
@@ -22,6 +24,9 @@ export async function GET(request: NextRequest) {
       .eq('product_id', productId)
       .order('collected_at', { ascending: false });
 
+    if (!includeSuspicious) {
+      query = query.eq('is_suspicious', false);
+    }
     if (channel) {
       query = query.eq('channel', channel);
     }

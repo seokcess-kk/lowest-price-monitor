@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
     const endDate = searchParams.get('end_date');
     const productIdsParam = searchParams.get('product_ids');
     const mode = searchParams.get('mode') === 'daily' ? 'daily' : 'raw';
+    const includeSuspicious = searchParams.get('include_suspicious') === 'true';
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'start_date와 end_date는 필수입니다.' }, { status: 400 });
@@ -22,6 +23,9 @@ export async function GET(request: NextRequest) {
       .lte('collected_at', endDate + 'T23:59:59.999Z')
       .order('collected_at', { ascending: true });
 
+    if (!includeSuspicious) {
+      query = query.eq('is_suspicious', false);
+    }
     if (productIdsParam) {
       const productIds = productIdsParam.split(',').map((id) => id.trim());
       query = query.in('product_id', productIds);

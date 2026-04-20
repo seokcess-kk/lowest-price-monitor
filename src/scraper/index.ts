@@ -1,6 +1,6 @@
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
-import { randomDelay } from './utils';
+import { delay, randomDelay } from './utils';
 import { flushUsage } from './brightdata';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
@@ -18,6 +18,13 @@ const CHANNEL_SCRAPERS: Record<Channel, Scraper> = {
   naver: (url, productName) => scrapeNaver(url, productName),
   danawa: (url) => scrapeDanawa(url),
 };
+
+/** 직전 baseline(median) 대비 ±50% 이상 벗어나면 1차 의심 */
+const SUSPICIOUS_THRESHOLD = 0.5;
+/** 1차 값과 재수집 값이 ±10% 이내면 동일 시세로 간주 → 실제 변동으로 수용 */
+const RECONFIRM_TOLERANCE = 0.1;
+/** 재수집 전 짧은 지연 (Bright Data 캐시 회피 + 호스트 부담 완화) */
+const RESCAN_DELAY_MS = 1500;
 
 function getChannelUrl(product: Product, channel: Channel): string | null {
   switch (channel) {
@@ -125,33 +132,46 @@ export async function collectAll(
 
   const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
-  // 이상치 감지용: 각 (productId, channel) → 가장 최근 수집가 lookup
-  // 한 번의 쿼리로 전체 활성 상품의 직전 가격을 가져와 Map으로 인덱싱
+  // 이상치 감지용 baseline: 각 (productId, channel) → 최근 7일 동안의 정상(is_suspicious=false) 가격 median
+  // 단발 이상치가 baseline을 오염시키지 않도록 median 사용
   const baselineProductIds = filteredProducts.map((p) => p.id);
-  const previousMap = new Map<string, number>(); // key: "productId:channel"
+  const baselineMap = new Map<string, number>(); // key: "productId:channel" → median
   try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: recentLogs } = await supabase
       .from('price_logs')
-      .select('product_id, channel, price, collected_at')
+      .select('product_id, channel, price')
       .in('product_id', baselineProductIds)
+      .eq('is_suspicious', false)
+      .gte('collected_at', sevenDaysAgo)
       .order('collected_at', { ascending: false })
-      .limit(5000);
+      .limit(10000);
+    const grouped = new Map<string, number[]>();
     for (const log of recentLogs ?? []) {
       const key = `${log.product_id}:${log.channel}`;
-      if (!previousMap.has(key)) {
-        previousMap.set(key, log.price as number);
-      }
+      const arr = grouped.get(key);
+      if (arr) arr.push(log.price as number);
+      else grouped.set(key, [log.price as number]);
+    }
+    for (const [key, prices] of grouped) {
+      const sorted = [...prices].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median =
+        sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+      baselineMap.set(key, median);
     }
   } catch (e) {
-    console.warn('[collectAll] 이상치 baseline 조회 실패 (감지 생략):', e);
+    console.warn('[collectAll] 이상치 baseline(median) 조회 실패 (감지 생략):', e);
   }
 
-  /** 직전 값 대비 50% 이상 변동 → 이상치 */
-  const SUSPICIOUS_THRESHOLD = 0.5;
-  const isSuspicious = (prev: number | undefined, curr: number): boolean => {
-    if (prev === undefined || prev <= 0 || curr <= 0) return false;
-    const ratio = Math.abs(curr - prev) / prev;
-    return ratio >= SUSPICIOUS_THRESHOLD;
+  const isOutOfRange = (baseline: number | undefined, curr: number): boolean => {
+    if (baseline === undefined || baseline <= 0 || curr <= 0) return false;
+    return Math.abs(curr - baseline) / baseline >= SUSPICIOUS_THRESHOLD;
+  };
+
+  const isWithinTolerance = (a: number, b: number): boolean => {
+    if (a <= 0 || b <= 0) return false;
+    return Math.abs(a - b) / a <= RECONFIRM_TOLERANCE;
   };
 
   // bulk insert를 위해 누적
@@ -186,27 +206,69 @@ export async function collectAll(
       try {
         console.log(`[${channel}] ${product.name} 수집 중...`);
         const scraper = CHANNEL_SCRAPERS[channel];
-        const scrapeResult = await scraper(url, product.name);
+        const firstScrape = await scraper(url, product.name);
 
-        if (scrapeResult) {
-          result.success = true;
-          result.price = scrapeResult.price;
-          result.store_name = scrapeResult.storeName;
-          const prev = previousMap.get(`${product.id}:${channel}`);
-          const suspicious = isSuspicious(prev, scrapeResult.price);
-          if (suspicious) {
-            const ratioPct = prev
-              ? (((scrapeResult.price - prev) / prev) * 100).toFixed(1)
+        if (firstScrape) {
+          const baseline = baselineMap.get(`${product.id}:${channel}`);
+          let finalPrice = firstScrape.price;
+          let finalStore = firstScrape.storeName;
+          let suspicious = false;
+
+          if (isOutOfRange(baseline, firstScrape.price)) {
+            // baseline 대비 ±50% 벗어남 — 1회 재수집으로 확증 시도
+            const ratioPct = baseline
+              ? (((firstScrape.price - baseline) / baseline) * 100).toFixed(1)
               : 'n/a';
             console.warn(
-              `[collectAll] 이상치 감지 [${channel}] ${product.name}: ${prev} → ${scrapeResult.price} (${ratioPct}%)`
+              `[collectAll] 이상치 후보 [${channel}] ${product.name}: baseline=${baseline} → ${firstScrape.price} (${ratioPct}%) — 재수집 시도`
             );
+
+            await delay(RESCAN_DELAY_MS);
+            let secondScrape: ScrapeResult | null = null;
+            try {
+              secondScrape = await scraper(url, product.name);
+            } catch (rescanErr) {
+              console.warn(
+                `[collectAll] 재수집 실패 [${channel}] ${product.name}:`,
+                rescanErr
+              );
+            }
+
+            if (secondScrape && isWithinTolerance(firstScrape.price, secondScrape.price)) {
+              // 두 번 모두 비슷한 값 → 실제 가격 변동으로 수용
+              finalPrice = secondScrape.price;
+              finalStore = secondScrape.storeName;
+              suspicious = false;
+              console.log(
+                `[collectAll] 재수집 확증 [${channel}] ${product.name}: ${firstScrape.price} ≈ ${secondScrape.price} → 수용`
+              );
+            } else {
+              // 일관성 없음 → 의심 플래그 유지
+              // 2차가 baseline에 더 가까우면 그 값을 채택, 아니면 1차 값을 그대로 기록
+              if (
+                secondScrape &&
+                baseline !== undefined &&
+                Math.abs(secondScrape.price - baseline) <
+                  Math.abs(firstScrape.price - baseline)
+              ) {
+                finalPrice = secondScrape.price;
+                finalStore = secondScrape.storeName;
+              }
+              suspicious = true;
+              console.warn(
+                `[collectAll] 재수집 비일관 [${channel}] ${product.name}: 1차=${firstScrape.price}, 2차=${secondScrape?.price ?? 'null'} → is_suspicious=true`
+              );
+            }
           }
+
+          result.success = true;
+          result.price = finalPrice;
+          result.store_name = finalStore;
           priceRows.push({
             product_id: product.id,
             channel,
-            price: scrapeResult.price,
-            store_name: scrapeResult.storeName,
+            price: finalPrice,
+            store_name: finalStore,
             is_manual: isManual,
             is_suspicious: suspicious,
           });
