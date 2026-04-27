@@ -25,8 +25,11 @@ const SUSPICIOUS_THRESHOLD = 0.5;
 const RECONFIRM_TOLERANCE = 0.1;
 /** 재수집 전 짧은 지연 (Bright Data 캐시 회피 + 호스트 부담 완화) */
 const RESCAN_DELAY_MS = 500;
-/** 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3) */
-const PRODUCT_CONCURRENCY = 4;
+/**
+ * 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3).
+ * 쿠팡 우회로 응답이 길어질 때 zone 큐잉으로 timeout이 누적되는 것을 막기 위해 보수적으로 2.
+ */
+const PRODUCT_CONCURRENCY = 2;
 
 function getChannelUrl(product: Product, channel: Channel): string | null {
   switch (channel) {

@@ -63,8 +63,9 @@ export async function callWebUnlocker(opts: {
   let bytes = 0;
   let ok = false;
 
-  // 한 호출이 무한 hang 시 전체 수집이 묶이는 것을 방지
-  const REQUEST_TIMEOUT_MS = 25_000;
+  // 한 호출이 무한 hang 시 전체 수집이 묶이는 것을 방지.
+  // 쿠팡은 봇 우회 부담으로 30~50초 걸리는 경우가 흔해 60초로 둔다.
+  const REQUEST_TIMEOUT_MS = 60_000;
 
   try {
     const res = await fetch('https://api.brightdata.com/request', {
