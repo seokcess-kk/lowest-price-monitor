@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import type { PriceWithChange, Channel } from '@/types/database';
 
 interface ExportRow {
@@ -27,7 +26,10 @@ export function exportToCSV(data: ExportRow[], filename: string): void {
   downloadBlob(blob, filename.endsWith('.csv') ? filename : `${filename}.csv`);
 }
 
-export function exportToExcel(data: ExportRow[], filename: string): void {
+// xlsx 라이브러리(약 600KB)는 사용 시점에만 로드한다.
+// 모듈 정적 import 시 모든 페이지 초기 번들에 포함돼 라우팅 체감 속도가 느려진다.
+export async function exportToExcel(data: ExportRow[], filename: string): Promise<void> {
+  const XLSX = await import('xlsx');
   const wsData = data.map((row) => ({
     날짜: row.date,
     상품명: row.productName,
@@ -55,11 +57,15 @@ export function exportToExcel(data: ExportRow[], filename: string): void {
  * 메인 화면 스냅샷(상품 1행 × 채널 컬럼 와이드 포맷) Excel 내보내기.
  * 검색·필터·정렬 적용 후 화면에 보이는 그대로 받기 위해 호출자가 정리된 데이터를 넘긴다.
  *
- * 헤더(12열): 상품명 / 사방넷코드 / 쿠팡 / 스토어 / 링크 / 네이버 / 스토어 / 링크 / 다나와 / 스토어 / 링크 / 최저가 / 최저채널
+ * 헤더(13열): 상품명 / 사방넷코드 / 쿠팡 / 스토어 / 링크 / 네이버 / 스토어 / 링크 / 다나와 / 스토어 / 링크 / 최저가 / 최저채널
  * "스토어"·"링크"가 채널마다 반복되므로 객체 키 방식 대신 aoa_to_sheet로 직접 행 배열을 구성.
  * 쿠팡은 스토어명이 별도로 노출되지 않으므로 빈 문자열.
  */
-export function exportSnapshotToExcel(data: PriceWithChange[], filename: string): void {
+export async function exportSnapshotToExcel(
+  data: PriceWithChange[],
+  filename: string
+): Promise<void> {
+  const XLSX = await import('xlsx');
   const channels: Channel[] = ['coupang', 'naver', 'danawa'];
 
   const header = [

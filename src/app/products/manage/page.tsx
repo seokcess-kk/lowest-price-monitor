@@ -1,14 +1,20 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { useProducts } from '@/hooks/useProducts';
 import ProductForm from '@/components/ProductForm';
 import Modal from '@/components/Modal';
 import SearchInput from '@/components/SearchInput';
-import CsvImportModal from '@/components/CsvImportModal';
 import { ProductRowSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
 import type { Product, CreateProductInput, Channel } from '@/types/database';
+
+// xlsx-js-style을 포함한 무거운 모달은 사용자가 "Excel 일괄 등록" 버튼을 눌러
+// open=true가 될 때까지 코드 다운로드를 미룬다.
+const CsvImportModal = dynamic(() => import('@/components/CsvImportModal'), {
+  ssr: false,
+});
 
 type StatusFilter = 'all' | 'active' | 'inactive';
 type SortKey = 'name' | 'created' | 'status';

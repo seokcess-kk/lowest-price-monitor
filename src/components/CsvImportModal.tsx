@@ -1,8 +1,17 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import * as XLSX from 'xlsx-js-style';
 import Modal from './Modal';
+
+// xlsx-js-style은 약 1MB로 모든 페이지 초기 번들에 포함하지 않도록 사용 시점에만 동적 로드.
+type XlsxModule = typeof import('xlsx-js-style');
+let xlsxPromise: Promise<XlsxModule> | null = null;
+function loadXlsx(): Promise<XlsxModule> {
+  if (!xlsxPromise) {
+    xlsxPromise = import('xlsx-js-style');
+  }
+  return xlsxPromise;
+}
 
 interface ParsedRow {
   rowIndex: number;
@@ -100,7 +109,8 @@ export default function CsvImportModal({
   const [createdCount, setCreatedCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await loadXlsx();
     const headers = ['name', 'sabangnet_code', 'coupang_url', 'naver_url', 'danawa_url'];
     const example = [
       '예시 상품 (이 행은 삭제하고 사용하세요)',
@@ -171,6 +181,7 @@ export default function CsvImportModal({
   const handleFile = async (file: File) => {
     setError(null);
 
+    const XLSX = await loadXlsx();
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: 'array' });
     const sheet = wb.Sheets[wb.SheetNames[0]];

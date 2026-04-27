@@ -129,7 +129,7 @@ export default function ExportPage() {
         return;
       }
       const suffix = mode === 'daily' ? '_일별최저가' : '';
-      exportToExcel(data, `최저가_${startDate}_${endDate}${suffix}`);
+      await exportToExcel(data, `최저가_${startDate}_${endDate}${suffix}`);
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Export 실패');
     } finally {

@@ -315,13 +315,13 @@ export default function Home() {
             새로고침
           </button>
           <button
-            onClick={() => {
+            onClick={async () => {
               if (filtered.length === 0) {
                 alert('내보낼 상품이 없습니다.');
                 return;
               }
               const today = new Date().toISOString().split('T')[0];
-              exportSnapshotToExcel(filtered, `현재최저가_${today}`);
+              await exportSnapshotToExcel(filtered, `현재최저가_${today}`);
             }}
             disabled={filtered.length === 0}
             className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
