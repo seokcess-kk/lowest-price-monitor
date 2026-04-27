@@ -1,6 +1,6 @@
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
-import { delay, randomDelay } from './utils';
+import { delay } from './utils';
 import { flushUsage } from './brightdata';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
@@ -24,7 +24,9 @@ const SUSPICIOUS_THRESHOLD = 0.5;
 /** 1차 값과 재수집 값이 ±10% 이내면 동일 시세로 간주 → 실제 변동으로 수용 */
 const RECONFIRM_TOLERANCE = 0.1;
 /** 재수집 전 짧은 지연 (Bright Data 캐시 회피 + 호스트 부담 완화) */
-const RESCAN_DELAY_MS = 1500;
+const RESCAN_DELAY_MS = 500;
+/** 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3) */
+const PRODUCT_CONCURRENCY = 4;
 
 function getChannelUrl(product: Product, channel: Channel): string | null {
   switch (channel) {
@@ -189,7 +191,21 @@ export async function collectAll(
     error_message: string;
   }> = [];
 
-  for (const product of filteredProducts) {
+  // 진행률 콜백을 직렬화: 워커들이 동시에 완료해도 done 값이 역행하지 않도록
+  // (값 capture는 워커 안에서 동기적으로 ++ 한 직후 enqueue → enqueue 순서 = done 순서)
+  let progressChain: Promise<void> = Promise.resolve();
+  const reportProgress = (done: number): void => {
+    if (!onProgress) return;
+    progressChain = progressChain.then(async () => {
+      try {
+        await onProgress(done, totalProducts);
+      } catch (e) {
+        console.warn('[collectAll] onProgress 실패:', e);
+      }
+    });
+  };
+
+  const processProduct = async (product: Product): Promise<void> => {
     // 한 상품의 3개 채널은 서로 다른 호스트이므로 동시에 호출
     const channelTasks = channels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
@@ -300,18 +316,24 @@ export async function collectAll(
       results.push(r);
     }
 
-    doneProducts++;
-    if (onProgress) {
-      try {
-        await onProgress(doneProducts, totalProducts);
-      } catch (e) {
-        console.warn('[collectAll] onProgress 실패:', e);
-      }
-    }
+    const v = ++doneProducts;
+    reportProgress(v);
+  };
 
-    // 상품 간에는 호스트 부담을 줄이려 딜레이 유지
-    await randomDelay();
-  }
+  // 상품 단위 워커 풀 — 동시 PRODUCT_CONCURRENCY개 처리.
+  // 한 상품 내 3채널 병렬 × 동시 상품 수 = Bright Data zone에 동시 in-flight 호출 상한.
+  const queue = [...filteredProducts];
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const product = queue.shift();
+      if (!product) return;
+      await processProduct(product);
+    }
+  };
+  const workerCount = Math.min(PRODUCT_CONCURRENCY, filteredProducts.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  // 마지막 progress 콜백까지 flush
+  await progressChain;
 
   // bulk insert — 라운드트립 최소화
   if (priceRows.length > 0) {

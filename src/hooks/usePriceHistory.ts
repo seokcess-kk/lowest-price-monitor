@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { PriceLog } from '@/types/database';
 
 interface UsePriceHistoryOptions {
@@ -8,10 +8,21 @@ interface UsePriceHistoryOptions {
   limit?: number;
 }
 
-export function usePriceHistory(productId: string | null, options: UsePriceHistoryOptions = {}) {
-  const [data, setData] = useState<PriceLog[]>([]);
-  const [loading, setLoading] = useState(true);
+/**
+ * 상품의 가격 이력을 조회한다.
+ * initialData가 주어지면 첫 마운트의 fetch는 건너뛰고 그 값을 그대로 사용 (서버 프리페치 결과 재사용).
+ * options가 바뀌면(기간 토글 등) 클라이언트에서 다시 fetch.
+ */
+export function usePriceHistory(
+  productId: string | null,
+  options: UsePriceHistoryOptions = {},
+  initialData?: PriceLog[]
+) {
+  const [data, setData] = useState<PriceLog[]>(initialData ?? []);
+  const [loading, setLoading] = useState<boolean>(initialData ? false : true);
   const [error, setError] = useState<string | null>(null);
+  // 서버에서 받은 초기 데이터가 있을 때 첫 effect 호출 1회만 스킵
+  const skipFirstFetchRef = useRef<boolean>(!!initialData);
 
   const fetchHistory = useCallback(async () => {
     if (!productId) return;
@@ -40,6 +51,10 @@ export function usePriceHistory(productId: string | null, options: UsePriceHisto
   }, [productId, options.channel, options.startDate, options.endDate, options.limit]);
 
   useEffect(() => {
+    if (skipFirstFetchRef.current) {
+      skipFirstFetchRef.current = false;
+      return;
+    }
     fetchHistory();
   }, [fetchHistory]);
 

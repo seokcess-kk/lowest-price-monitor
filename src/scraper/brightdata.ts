@@ -63,6 +63,9 @@ export async function callWebUnlocker(opts: {
   let bytes = 0;
   let ok = false;
 
+  // 한 호출이 무한 hang 시 전체 수집이 묶이는 것을 방지
+  const REQUEST_TIMEOUT_MS = 25_000;
+
   try {
     const res = await fetch('https://api.brightdata.com/request', {
       method: 'POST',
@@ -76,6 +79,7 @@ export async function callWebUnlocker(opts: {
         format: 'raw',
         country: opts.country ?? 'kr',
       }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     status = res.status;
@@ -86,6 +90,13 @@ export async function callWebUnlocker(opts: {
     }
     bytes = text ? new TextEncoder().encode(text).length : 0;
     ok = res.ok;
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      console.warn(`[brightdata] ${opts.channel} 요청 ${REQUEST_TIMEOUT_MS}ms 초과로 중단`);
+      // 정상 처리 흐름(ok=false)으로 흘려보내 상위 채널 파서가 null 반환 + scrape_errors 기록
+    } else {
+      throw err;
+    }
   } finally {
     const durationMs = Date.now() - start;
     recordUsage({

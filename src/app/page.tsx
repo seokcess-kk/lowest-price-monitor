@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useLatestPrices } from '@/hooks/useLatestPrices';
-import { useSparklines } from '@/hooks/useSparklines';
-import { useLastCollected } from '@/hooks/useLastCollected';
+import { useDashboard } from '@/hooks/useDashboard';
 import PriceTable from '@/components/PriceTable';
 import PriceCardList from '@/components/PriceCardList';
 import SummaryCards from '@/components/SummaryCards';
@@ -50,9 +48,17 @@ function formatRelative(iso: string | null): { relative: string; absolute: strin
 }
 
 export default function Home() {
-  const { data, loading, error, refetch } = useLatestPrices();
-  const { data: sparklineMap } = useSparklines(7);
-  const { at: lastCollectedAt, refetch: refetchLastCollected } = useLastCollected();
+  const {
+    latest: data,
+    sparklines: sparklineMap,
+    lastCollectedAt,
+    loading,
+    error,
+    refetch: refetchDashboard,
+  } = useDashboard(7);
+  // 두 콜백 호출처를 그대로 두기 위해 분리된 함수명을 유지
+  const refetch = refetchDashboard;
+  const refetchLastCollected = refetchDashboard;
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ChangeFilter>('all');
@@ -79,6 +85,9 @@ export default function Home() {
 
       if (data.status === 'completed' || data.status === 'failed') {
         stopPolling();
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem('collect_in_progress');
+        }
         refetch();
         refetchLastCollected();
       }
@@ -98,6 +107,9 @@ export default function Home() {
         return;
       }
       setCollectStatus({ status: 'pending' });
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem('collect_in_progress', '1');
+      }
       pollRef.current = setInterval(pollStatus, 3000);
     } catch {
       setCollectStatus({
@@ -109,18 +121,40 @@ export default function Home() {
     }
   };
 
-  // 마운트 시 진행 중인 수집이 있으면 자동으로 폴링 재시작 (탭 이동 후 복귀 대응)
+  // 마운트 시 진행 중인 수집이 있으면 자동으로 폴링 재시작 (탭 이동 후 복귀 대응).
+  // 페이지 전환마다 매번 GET하던 동작을 가드: 진행 중 플래그가 있거나 마지막 체크 후 60초 경과 시에만 호출.
   useEffect(() => {
     let cancelled = false;
+    const COLLECT_CHECK_TTL_MS = 60_000;
+    const FLAG_KEY = 'collect_in_progress';
+    const TS_KEY = 'collect_last_check_ts';
+
+    const flag =
+      typeof window !== 'undefined' ? window.sessionStorage.getItem(FLAG_KEY) : null;
+    const lastCheck =
+      typeof window !== 'undefined'
+        ? Number(window.sessionStorage.getItem(TS_KEY) || 0)
+        : 0;
+    const stale = Date.now() - lastCheck > COLLECT_CHECK_TTL_MS;
+    if (!flag && !stale) return;
+
     fetch('/api/collect')
       .then((res) => res.json())
       .then((data: CollectStatus) => {
         if (cancelled) return;
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.setItem(TS_KEY, String(Date.now()));
+        }
         if (data && (data.status === 'pending' || data.status === 'running')) {
+          if (typeof window !== 'undefined') {
+            window.sessionStorage.setItem(FLAG_KEY, '1');
+          }
           setCollectStatus(data);
           if (!pollRef.current) {
             pollRef.current = setInterval(pollStatus, 3000);
           }
+        } else if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem(FLAG_KEY);
         }
       })
       .catch(() => {
