@@ -139,9 +139,40 @@ export default function ManageProductsPage() {
       toast.error(body.error || '등록 실패');
       return;
     }
-    toast.success(`"${data.name}" 등록 완료`);
+    const created: Product = await res.json();
+    toast.success(`"${data.name}" 등록 완료 — 가격 검증 시작`);
     setFormOpen(false);
     refetch();
+
+    // 등록 후 즉시 1회 가격 수집을 트리거해 URL 유효성을 실측 검증.
+    // fire-and-forget — 폼은 닫히고 결과는 toast로 전달 (60초 내외 소요).
+    fetch(`/api/collect/product/${created.id}`, { method: 'POST' })
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          toast.error(`"${data.name}" 가격 검증 실패: ${body.error ?? r.statusText}`);
+          return;
+        }
+        const successCount = body.success ?? 0;
+        const failedCount = body.failed ?? 0;
+        if (successCount > 0 && failedCount === 0) {
+          toast.success(`"${data.name}" 가격 검증 완료 — ${successCount}건 성공`);
+        } else if (successCount > 0) {
+          toast.show(
+            `"${data.name}" 가격 검증: ${successCount}건 성공, ${failedCount}건 실패. URL을 확인하세요.`,
+            'info'
+          );
+        } else {
+          toast.error(
+            `"${data.name}" 모든 채널 검증 실패 (${failedCount}건). URL이 잘못됐을 수 있습니다.`
+          );
+        }
+      })
+      .catch((e) => {
+        toast.error(
+          `"${data.name}" 가격 검증 호출 오류: ${e instanceof Error ? e.message : ''}`
+        );
+      });
   };
 
   const handleUpdate = async (data: CreateProductInput) => {

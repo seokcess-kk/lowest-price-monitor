@@ -28,6 +28,78 @@ const FIELD_LABELS: Record<string, string> = {
   danawa_url: '다나와 URL',
 };
 
+interface UrlValidation {
+  ok: boolean;
+  /** 차단 사유 (등록 막음) */
+  error?: string;
+  /** 진행은 가능하지만 가격 추출 실패 가능성 안내 */
+  warning?: string;
+}
+
+/**
+ * 등록 단계에서 URL 형식·필수 식별자를 검증한다.
+ * - error: 호스트 불일치 / 패턴 미스 → 등록 차단
+ * - warning: 등록은 허용하되 옵션 미지정 등으로 가격 추출이 실패할 수 있음을 안내
+ *
+ * 페이지 살아있는지(404·단종)는 여기서 알 수 없고, 등록 후 백그라운드 가격 검증이 보완한다.
+ */
+export function validateUrl(
+  channel: 'coupang' | 'naver' | 'danawa',
+  raw: string
+): UrlValidation {
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: true }; // 비워두는 건 허용 (선택 입력)
+
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return { ok: false, error: '올바른 URL 형식이 아닙니다.' };
+  }
+  const host = u.hostname.toLowerCase();
+
+  if (channel === 'coupang') {
+    if (!host.endsWith('coupang.com'))
+      return { ok: false, error: '쿠팡 도메인(coupang.com)이 아닙니다.' };
+    if (!/\/(?:vp\/)?products\/\d+/.test(u.pathname))
+      return {
+        ok: false,
+        error: '쿠팡 상품 URL 형식이 아닙니다. (/vp/products/{id} 형태)',
+      };
+    if (!u.searchParams.get('vendorItemId'))
+      return {
+        ok: true,
+        warning:
+          'vendorItemId가 없습니다. 옵션이 선택되지 않은 페이지로 인식되어 가격 추출이 실패할 수 있습니다.',
+      };
+    return { ok: true };
+  }
+
+  if (channel === 'naver') {
+    if (!host.endsWith('naver.com'))
+      return { ok: false, error: '네이버 도메인(naver.com)이 아닙니다.' };
+    const isCatalog = /\/catalog\/\d+/.test(u.pathname);
+    const isSmartstore = /^smartstore\./.test(host) || /^brand\./.test(host);
+    if (!isCatalog && !isSmartstore)
+      return {
+        ok: true,
+        warning:
+          '카탈로그(/catalog/...) 또는 스마트스토어/브랜드 URL이 아닐 수 있어 파싱이 실패할 수 있습니다.',
+      };
+    return { ok: true };
+  }
+
+  if (channel === 'danawa') {
+    if (!host.endsWith('danawa.com'))
+      return { ok: false, error: '다나와 도메인(danawa.com)이 아닙니다.' };
+    if (!u.searchParams.get('pcode'))
+      return { ok: false, error: '다나와 상품 URL에 pcode 쿼리가 필요합니다.' };
+    return { ok: true };
+  }
+
+  return { ok: true };
+}
+
 // 채널별로 "동일 상품 페이지"로 해석되는 최소 파라미터만 남겨
 // DB·중복검사 키를 안정화한다. 검색·트래킹 컨텍스트는 모두 제거.
 function normalizeUrl(channel: 'coupang' | 'naver' | 'danawa', raw: string): string {
@@ -78,9 +150,18 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
   const [danawaUrl, setDanawaUrl] = useState(initialData?.danawa_url || '');
   const [loading, setLoading] = useState(false);
 
+  const coupangCheck = validateUrl('coupang', coupangUrl);
+  const naverCheck = validateUrl('naver', naverUrl);
+  const danawaCheck = validateUrl('danawa', danawaUrl);
+  const hasAnyError = !coupangCheck.ok || !naverCheck.ok || !danawaCheck.ok;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (hasAnyError) {
+      window.alert('URL 형식 오류가 있는 채널이 있습니다. 빨간색 메시지를 확인하세요.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -218,52 +299,37 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           placeholder="예: SB-12345"
         />
       </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#E44232' }} />
-          쿠팡 URL
-        </label>
-        <input
-          type="url"
-          value={coupangUrl}
-          onChange={(e) => setCoupangUrl(e.target.value)}
-          onBlur={(e) => setCoupangUrl(normalizeUrl('coupang', e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-          placeholder="https://www.coupang.com/..."
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#03C75A' }} />
-          네이버 URL
-        </label>
-        <input
-          type="url"
-          value={naverUrl}
-          onChange={(e) => setNaverUrl(e.target.value)}
-          onBlur={(e) => setNaverUrl(normalizeUrl('naver', e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-          placeholder="https://search.shopping.naver.com/..."
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#0068B7' }} />
-          다나와 URL
-        </label>
-        <input
-          type="url"
-          value={danawaUrl}
-          onChange={(e) => setDanawaUrl(e.target.value)}
-          onBlur={(e) => setDanawaUrl(normalizeUrl('danawa', e.target.value))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
-          placeholder="https://prod.danawa.com/..."
-        />
-      </div>
+      <UrlField
+        color="#E44232"
+        label="쿠팡 URL"
+        value={coupangUrl}
+        check={coupangCheck}
+        onChange={setCoupangUrl}
+        onBlur={() => setCoupangUrl(normalizeUrl('coupang', coupangUrl))}
+        placeholder="https://www.coupang.com/..."
+      />
+      <UrlField
+        color="#03C75A"
+        label="네이버 URL"
+        value={naverUrl}
+        check={naverCheck}
+        onChange={setNaverUrl}
+        onBlur={() => setNaverUrl(normalizeUrl('naver', naverUrl))}
+        placeholder="https://search.shopping.naver.com/..."
+      />
+      <UrlField
+        color="#0068B7"
+        label="다나와 URL"
+        value={danawaUrl}
+        check={danawaCheck}
+        onChange={setDanawaUrl}
+        onBlur={() => setDanawaUrl(normalizeUrl('danawa', danawaUrl))}
+        placeholder="https://prod.danawa.com/..."
+      />
       <div className="flex gap-2">
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || hasAnyError}
           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
         >
           {loading ? '처리 중...' : initialData ? '수정' : '등록'}
@@ -279,5 +345,56 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
         )}
       </div>
     </form>
+  );
+}
+
+interface UrlFieldProps {
+  color: string;
+  label: string;
+  value: string;
+  check: UrlValidation;
+  placeholder: string;
+  onChange: (next: string) => void;
+  onBlur: () => void;
+}
+
+function UrlField({
+  color,
+  label,
+  value,
+  check,
+  placeholder,
+  onChange,
+  onBlur,
+}: UrlFieldProps) {
+  const borderClass = !check.ok
+    ? 'border-red-400 focus:ring-red-500'
+    : check.warning
+      ? 'border-yellow-400 focus:ring-yellow-500'
+      : 'border-gray-300 focus:ring-blue-500';
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">
+        <span
+          className="inline-block w-2 h-2 rounded-full mr-1.5"
+          style={{ backgroundColor: color }}
+        />
+        {label}
+      </label>
+      <input
+        type="url"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 text-gray-900 ${borderClass}`}
+        placeholder={placeholder}
+      />
+      {!check.ok && check.error && (
+        <p className="mt-1 text-xs text-red-600">⛔ {check.error}</p>
+      )}
+      {check.ok && check.warning && (
+        <p className="mt-1 text-xs text-yellow-700">⚠ {check.warning}</p>
+      )}
+    </div>
   );
 }
