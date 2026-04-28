@@ -27,17 +27,7 @@ const FILTER_CODEC = enumCodec<ChangeFilter>(
   ['all', 'changed', 'bigDrop', 'failed'],
   'all'
 );
-const VIEW_CODEC = enumCodec<ViewMode>(['card', 'table'], 'table');
-const PAGE_SIZE_OPTIONS = ['50', '100', '200', 'all'] as const;
-type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
-const PAGE_SIZE_CODEC = enumCodec<PageSizeOption>(PAGE_SIZE_OPTIONS, '50');
-const PAGE_CODEC = {
-  parse: (raw: string | null) => {
-    const n = Number(raw);
-    return Number.isInteger(n) && n > 0 ? n : 1;
-  },
-  format: (value: number) => (value > 1 ? String(value) : null),
-};
+const VIEW_CODEC = enumCodec<ViewMode>(['card', 'table'], 'card');
 
 interface CollectStatus {
   id?: string;
@@ -97,18 +87,11 @@ export default function Home() {
     new Set<string>(),
     stringSetCodec
   );
-  const [view, setView] = useUrlState<ViewMode>('view', 'table', VIEW_CODEC);
-  const [page, setPage] = useUrlState('page', 1, PAGE_CODEC);
-  const [pageSize, setPageSize] = useUrlState<PageSizeOption>(
-    'pageSize',
-    '50',
-    PAGE_SIZE_CODEC
-  );
+  const [view, setView] = useUrlState<ViewMode>('view', 'card', VIEW_CODEC);
 
   const [collecting, setCollecting] = useState(false);
   const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
-  const didResetPageRef = useRef(false);
   const [collectingIds, setCollectingIds] = useState<Set<string>>(new Set());
   const toast = useToast();
 
@@ -347,28 +330,6 @@ export default function Home() {
     } as const;
   }, [data, search, matchSearch, matchBrand]);
 
-  useEffect(() => {
-    if (!didResetPageRef.current) {
-      didResetPageRef.current = true;
-      return;
-    }
-    setPage(1);
-  }, [search, filter, brandSelection, pageSize, setPage]);
-
-  const pageSizeNumber =
-    pageSize === 'all' ? Math.max(filtered.length, 1) : Number(pageSize);
-  const totalPages =
-    pageSize === 'all'
-      ? 1
-      : Math.max(1, Math.ceil(filtered.length / pageSizeNumber));
-  const safePage = Math.min(page, totalPages);
-  const pageStart = pageSize === 'all' ? 0 : (safePage - 1) * pageSizeNumber;
-  const pageEnd =
-    pageSize === 'all'
-      ? filtered.length
-      : Math.min(pageStart + pageSizeNumber, filtered.length);
-  const paged = filtered.slice(pageStart, pageEnd);
-
   // 적용된 필터 칩 — 사용자가 무엇이 활성인지 즉시 인지하도록
   const activeChips = useMemo(() => {
     const items: Array<{
@@ -434,24 +395,6 @@ export default function Home() {
     setBrandSelection(new Set());
   }, [setSearch, setFilter, setBrandSelection]);
 
-  const exportConditioned = useCallback(async () => {
-    if (filtered.length === 0) {
-      toast.show('선택 조건에 맞는 상품이 없습니다.', 'info');
-      return;
-    }
-    const today = new Date().toISOString().split('T')[0];
-    await exportSnapshotToExcel(filtered, `선택조건_현재최저가_${today}`);
-  }, [filtered, toast]);
-
-  const exportAll = useCallback(async () => {
-    if (data.length === 0) {
-      toast.show('내보낼 상품이 없습니다.', 'info');
-      return;
-    }
-    const today = new Date().toISOString().split('T')[0];
-    await exportSnapshotToExcel(data, `전체상품_현재최저가_${today}`);
-  }, [data, toast]);
-
   return (
     <div>
       <div className="flex items-center justify-between mb-4 sm:mb-6 flex-wrap gap-3">
@@ -485,6 +428,20 @@ export default function Home() {
             className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm"
           >
             새로고침
+          </button>
+          <button
+            onClick={async () => {
+              if (filtered.length === 0) {
+                toast.show('내보낼 상품이 없습니다.', 'info');
+                return;
+              }
+              const today = new Date().toISOString().split('T')[0];
+              await exportSnapshotToExcel(filtered, `현재최저가_${today}`);
+            }}
+            disabled={filtered.length === 0}
+            className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
+          >
+            Excel 내보내기
           </button>
         </div>
       </div>
@@ -556,7 +513,7 @@ export default function Home() {
             }}
           />
 
-          <div className="sticky top-14 z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 py-3 mb-4 bg-gray-50/95 backdrop-blur border-y border-gray-200 flex flex-wrap items-center gap-3 justify-between">
+          <div className="mb-4 flex flex-wrap items-center gap-3 justify-between">
             <div className="flex flex-wrap items-center gap-3 flex-1 w-full">
               <SearchInput value={search} onChange={setSearch} />
               <FilterChips value={filter} onChange={setFilter} counts={counts} />
@@ -565,14 +522,6 @@ export default function Home() {
                 onChange={setBrandSelection}
                 counts={brandCounts.byId}
                 uncategorizedCount={brandCounts.uncategorized}
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
-              <ExportButtons
-                filteredCount={filtered.length}
-                totalCount={data.length}
-                onExportConditioned={exportConditioned}
-                onExportAll={exportAll}
               />
             </div>
             {/* 모바일에서는 카드 뷰만, 데스크톱에서는 토글 노출 */}
@@ -594,20 +543,10 @@ export default function Home() {
             </div>
           ) : (
             <>
-              <PaginationBar
-                totalCount={filtered.length}
-                pageStart={pageStart}
-                pageEnd={pageEnd}
-                page={safePage}
-                totalPages={totalPages}
-                pageSize={pageSize}
-                onPageChange={setPage}
-                onPageSizeChange={setPageSize}
-              />
               {/* 모바일은 항상 카드 뷰 */}
               <div className="md:hidden">
                 <PriceCardList
-                  data={paged}
+                  data={filtered}
                   sparklineMap={sparklineMap}
                   collectingIds={collectingIds}
                   globalCollecting={isActive}
@@ -619,7 +558,7 @@ export default function Home() {
                 {view === 'table' ? (
                   <div className="bg-white rounded-lg shadow-sm border">
                     <PriceTable
-                      data={paged}
+                      data={filtered}
                       sparklineMap={sparklineMap}
                       collectingIds={collectingIds}
                       globalCollecting={isActive}
@@ -628,7 +567,7 @@ export default function Home() {
                   </div>
                 ) : (
                   <PriceCardList
-                  data={paged}
+                  data={filtered}
                   sparklineMap={sparklineMap}
                   collectingIds={collectingIds}
                   globalCollecting={isActive}
@@ -636,155 +575,10 @@ export default function Home() {
                 />
                 )}
               </div>
-              <PaginationBar
-                totalCount={filtered.length}
-                pageStart={pageStart}
-                pageEnd={pageEnd}
-                page={safePage}
-                totalPages={totalPages}
-                pageSize={pageSize}
-                onPageChange={setPage}
-                onPageSizeChange={setPageSize}
-                compact
-              />
             </>
           )}
         </>
       )}
-    </div>
-  );
-}
-
-interface ExportButtonsProps {
-  filteredCount: number;
-  totalCount: number;
-  onExportConditioned: () => void;
-  onExportAll: () => void;
-}
-
-function ExportButtons({
-  filteredCount,
-  totalCount,
-  onExportConditioned,
-  onExportAll,
-}: ExportButtonsProps) {
-  const sameAsAll = filteredCount === totalCount;
-  return (
-    <div className="flex items-center gap-2 w-full sm:w-auto">
-      <button
-        type="button"
-        onClick={onExportConditioned}
-        disabled={filteredCount === 0}
-        title="현재 검색어와 필터 조건에 맞는 상품을 모두 내보냅니다."
-        className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
-      >
-        선택 조건 엑셀
-        {sameAsAll && (
-          <span className="ml-1 text-[11px] text-green-100">· 전체와 동일</span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={onExportAll}
-        disabled={totalCount === 0}
-        title="검색어와 필터를 무시하고 전체 상품을 내보냅니다."
-        className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-white text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 text-sm"
-      >
-        전체 상품 엑셀
-      </button>
-    </div>
-  );
-}
-
-interface PaginationBarProps {
-  totalCount: number;
-  pageStart: number;
-  pageEnd: number;
-  page: number;
-  totalPages: number;
-  pageSize: PageSizeOption;
-  onPageChange: (next: number) => void;
-  onPageSizeChange: (next: PageSizeOption) => void;
-  compact?: boolean;
-}
-
-function PaginationBar({
-  totalCount,
-  pageStart,
-  pageEnd,
-  page,
-  totalPages,
-  pageSize,
-  onPageChange,
-  onPageSizeChange,
-  compact = false,
-}: PaginationBarProps) {
-  const isAll = pageSize === 'all';
-  const from = totalCount === 0 ? 0 : pageStart + 1;
-  const to = totalCount === 0 ? 0 : pageEnd;
-
-  return (
-    <div
-      className={`flex flex-wrap items-center justify-between gap-2 text-sm text-gray-600 ${
-        compact ? 'mt-3' : 'mb-3'
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <span className="tabular-nums">
-          {from}-{to} / {totalCount}
-        </span>
-        <label className="inline-flex items-center gap-1 text-xs">
-          <span className="text-gray-500">표시</span>
-          <select
-            value={pageSize}
-            onChange={(e) => onPageSizeChange(e.target.value as PageSizeOption)}
-            className="h-8 rounded border border-gray-300 bg-white px-2 text-xs text-gray-700"
-          >
-            <option value="50">50개</option>
-            <option value="100">100개</option>
-            <option value="200">200개</option>
-            <option value="all">전체</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => onPageChange(1)}
-          disabled={page <= 1 || isAll}
-          className="hidden sm:inline-flex min-h-8 px-2 items-center rounded border border-gray-300 bg-white disabled:opacity-30 hover:bg-gray-50"
-        >
-          처음
-        </button>
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.max(1, page - 1))}
-          disabled={page <= 1 || isAll}
-          className="min-h-8 px-2 rounded border border-gray-300 bg-white disabled:opacity-30 hover:bg-gray-50"
-        >
-          이전
-        </button>
-        <span className="px-2 text-xs tabular-nums">
-          {isAll ? '전체' : `${page} / ${totalPages}`}
-        </span>
-        <button
-          type="button"
-          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
-          disabled={page >= totalPages || isAll}
-          className="min-h-8 px-2 rounded border border-gray-300 bg-white disabled:opacity-30 hover:bg-gray-50"
-        >
-          다음
-        </button>
-        <button
-          type="button"
-          onClick={() => onPageChange(totalPages)}
-          disabled={page >= totalPages || isAll}
-          className="hidden sm:inline-flex min-h-8 px-2 items-center rounded border border-gray-300 bg-white disabled:opacity-30 hover:bg-gray-50"
-        >
-          마지막
-        </button>
-      </div>
     </div>
   );
 }
