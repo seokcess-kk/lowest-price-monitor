@@ -19,17 +19,56 @@ const CHANNEL_SCRAPERS: Record<Channel, Scraper> = {
   danawa: (url) => scrapeDanawa(url),
 };
 
-/** 직전 baseline(median) 대비 ±50% 이상 벗어나면 1차 의심 */
+/** baseline(dominantPrice) 대비 ±50% 이상 벗어나면 1차 의심 */
 const SUSPICIOUS_THRESHOLD = 0.5;
-/** 1차 값과 재수집 값이 ±10% 이내면 동일 시세로 간주 → 실제 변동으로 수용 */
-const RECONFIRM_TOLERANCE = 0.1;
-/** 재수집 전 짧은 지연 (Bright Data 캐시 회피 + 호스트 부담 완화) */
-const RESCAN_DELAY_MS = 500;
+/**
+ * 재수집 전 지연 (Bright Data 응답 캐시·CDN 노드 회피 + 호스트 부담 완화).
+ * 단품 판매자/묶음 판매자 노출 전환은 수 초 내에도 일어나는 편이라 너무 짧으면 같은 응답이 반복된다.
+ */
+const RESCAN_DELAY_MS = 5_000;
+/** dominantPrice 클러스터를 잡을 때 한 가격을 중심으로 하는 ±폭 (20%) */
+const CLUSTER_BAND = 0.2;
 /**
  * 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3).
  * 쿠팡 우회로 응답이 길어질 때 zone 큐잉으로 timeout이 누적되는 것을 막기 위해 보수적으로 2.
  */
 const PRODUCT_CONCURRENCY = 2;
+
+/**
+ * 7일 정상 가격 시계열에서 "주류 가격대"의 median을 추출한다.
+ *
+ * 알고리즘:
+ *   1. 각 가격 p를 중심으로 [p·(1-CLUSTER_BAND), p·(1+CLUSTER_BAND)] 범위에 들어오는
+ *      가격 개수를 센다 — 이 가격대가 얼마나 자주 나타났는지.
+ *   2. 카운트가 최대인 중심을 채택. 동률이면 더 높은 가격 쪽 채택
+ *      (네이버 묶음 카탈로그에서 단품가 클러스터가 묶음가 클러스터와 동수일 때
+ *       "단품 = 비정상" 가정을 깔고 묶음 쪽을 baseline으로 보존).
+ *   3. 채택된 중심의 ±CLUSTER_BAND 범위 가격들의 median을 반환.
+ */
+export function computeDominantPrice(prices: number[]): number {
+  const valid = prices.filter((p) => Number.isFinite(p) && p > 0);
+  if (valid.length === 0) return 0;
+  if (valid.length === 1) return valid[0];
+
+  const sorted = [...valid].sort((a, b) => a - b);
+  let bestCount = 0;
+  let bestCenter = sorted[Math.floor(sorted.length / 2)];
+  for (const p of sorted) {
+    const lo = p * (1 - CLUSTER_BAND);
+    const hi = p * (1 + CLUSTER_BAND);
+    let count = 0;
+    for (const x of sorted) if (x >= lo && x <= hi) count++;
+    if (count > bestCount || (count === bestCount && p > bestCenter)) {
+      bestCount = count;
+      bestCenter = p;
+    }
+  }
+  const lo = bestCenter * (1 - CLUSTER_BAND);
+  const hi = bestCenter * (1 + CLUSTER_BAND);
+  const cluster = sorted.filter((x) => x >= lo && x <= hi);
+  const mid = Math.floor(cluster.length / 2);
+  return cluster.length % 2 === 0 ? (cluster[mid - 1] + cluster[mid]) / 2 : cluster[mid];
+}
 
 function getChannelUrl(product: Product, channel: Channel): string | null {
   switch (channel) {
@@ -137,10 +176,18 @@ export async function collectAll(
 
   const channels: Channel[] = ['danawa', 'coupang', 'naver'];
 
-  // 이상치 감지용 baseline: 각 (productId, channel) → 최근 7일 동안의 정상(is_suspicious=false) 가격 median
-  // 단발 이상치가 baseline을 오염시키지 않도록 median 사용
+  // 이상치 감지용 baseline.
+  //
+  // 단순 7일 median은 네이버 카탈로그처럼 "묶음 판매자(고가)"와 "단품 판매자(저가)"가
+  // 한 카탈로그에 섞여 노출되는 경우를 못 잡는다 — median이 두 가격대 중간에 위치해서
+  // 양쪽 다 baseline ±50% 안에 들어와 의심으로 분류되지 않기 때문.
+  //
+  // 대신 각 가격을 중심으로 ±20% 범위(CLUSTER_BAND)에 속하는 가격들을 카운트하고,
+  // 가장 큰 클러스터(=주류 가격대)의 median을 dominantPrice로 잡는다.
+  // 동률이면 더 높은 가격 쪽을 채택 — 묶음 SKU 카탈로그에서 단품가 클러스터가 묶음가 클러스터를
+  // 카운트로 이기는 경우가 있어, tie 상황에서는 묶음(고가) 쪽으로 편향시킨다.
   const baselineProductIds = filteredProducts.map((p) => p.id);
-  const baselineMap = new Map<string, number>(); // key: "productId:channel" → median
+  const baselineMap = new Map<string, number>(); // key: "productId:channel" → dominantPrice
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: recentLogs } = await supabase
@@ -159,24 +206,16 @@ export async function collectAll(
       else grouped.set(key, [log.price as number]);
     }
     for (const [key, prices] of grouped) {
-      const sorted = [...prices].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      const median =
-        sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-      baselineMap.set(key, median);
+      const dominant = computeDominantPrice(prices);
+      if (dominant > 0) baselineMap.set(key, dominant);
     }
   } catch (e) {
-    console.warn('[collectAll] 이상치 baseline(median) 조회 실패 (감지 생략):', e);
+    console.warn('[collectAll] 이상치 baseline(dominantPrice) 조회 실패 (감지 생략):', e);
   }
 
   const isOutOfRange = (baseline: number | undefined, curr: number): boolean => {
     if (baseline === undefined || baseline <= 0 || curr <= 0) return false;
     return Math.abs(curr - baseline) / baseline >= SUSPICIOUS_THRESHOLD;
-  };
-
-  const isWithinTolerance = (a: number, b: number): boolean => {
-    if (a <= 0 || b <= 0) return false;
-    return Math.abs(a - b) / a <= RECONFIRM_TOLERANCE;
   };
 
   // bulk insert를 위해 누적
@@ -234,7 +273,14 @@ export async function collectAll(
           let suspicious = false;
 
           if (isOutOfRange(baseline, firstScrape.price)) {
-            // baseline 대비 ±50% 벗어남 — 1회 재수집으로 확증 시도
+            // baseline 대비 ±50% 벗어남 — 1회 재수집으로 가격대 회복 여부 확인.
+            //
+            // 이전 정책은 "1차/2차 ±10% 일치 = 확증"으로 받아들였지만,
+            // 단품 판매자가 카탈로그에 노출되어 있을 때는 같은 가격이 안정적으로 두 번 잡혀
+            // 단품가가 그대로 통과되는 문제가 있었다.
+            //
+            // 새 정책: 2차도 baseline ±50% 안에 들어와야만 정상으로 간주.
+            // 그렇지 않으면 두 호출 다 비정상으로 보고 baseline에 더 가까운 값을 채택 + suspicious=true.
             const ratioPct = baseline
               ? (((firstScrape.price - baseline) / baseline) * 100).toFixed(1)
               : 'n/a';
@@ -253,17 +299,17 @@ export async function collectAll(
               );
             }
 
-            if (secondScrape && isWithinTolerance(firstScrape.price, secondScrape.price)) {
-              // 두 번 모두 비슷한 값 → 실제 가격 변동으로 수용
+            if (secondScrape && !isOutOfRange(baseline, secondScrape.price)) {
+              // 2차가 baseline 안으로 회복 → 일시적 노출 흔들림으로 보고 2차 값 채택
               finalPrice = secondScrape.price;
               finalStore = secondScrape.storeName;
               suspicious = false;
               console.log(
-                `[collectAll] 재수집 확증 [${channel}] ${product.name}: ${firstScrape.price} ≈ ${secondScrape.price} → 수용`
+                `[collectAll] 재수집 회복 [${channel}] ${product.name}: 1차=${firstScrape.price}, 2차=${secondScrape.price} → 2차 채택`
               );
             } else {
-              // 일관성 없음 → 의심 플래그 유지
-              // 2차가 baseline에 더 가까우면 그 값을 채택, 아니면 1차 값을 그대로 기록
+              // 1차·2차 모두 baseline 벗어남 → 의심으로 기록
+              // baseline에 더 가까운 값을 채택해 다음 baseline 오염을 최소화
               if (
                 secondScrape &&
                 baseline !== undefined &&
