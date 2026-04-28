@@ -39,6 +39,25 @@ async function main(): Promise<void> {
       console.error('에러:', result.errors);
     }
 
+    // 수집 직후 이상치 자동 마킹 — 차트·KPI에 즉시 반영.
+    // RPC 미적용 환경에서는 무해하게 skip.
+    try {
+      const sb = supabase ?? createServiceClient();
+      const { data: flagged, error: rpcErr } = await sb.rpc('mark_outliers', {
+        p_window_days: 30,
+        p_min_samples: 5,
+        p_mad_threshold: 6.0,
+        p_ratio_threshold: 0.5,
+      });
+      if (rpcErr) {
+        console.warn(`[mark_outliers] skip: ${rpcErr.message}`);
+      } else {
+        console.log(`[mark_outliers] ${flagged ?? 0}건 의심 마킹`);
+      }
+    } catch (e) {
+      console.warn('[mark_outliers] 예외:', e);
+    }
+
     if (supabase && requestId) {
       await supabase
         .from('collect_requests')

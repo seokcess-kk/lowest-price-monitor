@@ -29,6 +29,7 @@ function formatRelativeShort(iso: string | null): string {
 
 type Period = '7d' | '30d' | '90d' | 'all';
 type ChartMode = 'combined' | 'split';
+type Aggregation = 'daily' | 'raw';
 
 const PERIOD_LABELS: Record<Period, string> = {
   '7d': '7일',
@@ -77,6 +78,7 @@ export default function ProductDetailClient({
   const product = initialProduct;
   const [period, setPeriod] = useState<Period>(initialPeriod);
   const [chartMode, setChartMode] = useState<ChartMode>('combined');
+  const [aggregation, setAggregation] = useState<Aggregation>('daily');
   const [chartChannels, setChartChannels] = useState<Set<Channel>>(
     new Set(CHANNELS)
   );
@@ -537,6 +539,31 @@ export default function ProductDetailClient({
                     분리
                   </button>
                 </div>
+                {/* 집계 토글 — 일별 최저 vs 모든 시점 */}
+                <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-xs">
+                  <button
+                    onClick={() => setAggregation('daily')}
+                    className={`px-3 py-1.5 ${
+                      aggregation === 'daily'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
+                    title="같은 날 같은 채널의 최저값 1점만 표시 (이상치 영향 최소)"
+                  >
+                    일별 최저
+                  </button>
+                  <button
+                    onClick={() => setAggregation('raw')}
+                    className={`px-3 py-1.5 border-l border-gray-300 ${
+                      aggregation === 'raw'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50'
+                    }`}
+                    title="모든 수집 시점을 그대로 표시 (의심 데이터 검증용)"
+                  >
+                    전체 수집
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -575,6 +602,7 @@ export default function ProductDetailClient({
                   data={data}
                   visibleChannels={Array.from(chartChannels)}
                   mode={chartMode}
+                  aggregation={aggregation}
                 />
               )}
             </div>

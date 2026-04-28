@@ -12,12 +12,19 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { PriceLog, Channel } from '@/types/database';
+import { dateKeyKST } from '@/lib/date-utils';
 
 interface PriceChartProps {
   data: PriceLog[];
   visibleChannels?: Channel[];
   /** 'combined': 한 차트에 모든 채널 / 'split': 채널마다 별도 작은 차트 */
   mode?: 'combined' | 'split';
+  /**
+   * 'daily' (기본): 같은 KST 날짜 같은 채널의 최저값 1점만.
+   *   1회 이상치가 차트를 망치는 영향을 거의 0으로 만든다.
+   * 'raw': 모든 수집 시각을 그대로 점으로 표시. 의심 데이터 검증 시 사용.
+   */
+  aggregation?: 'daily' | 'raw';
   height?: number;
 }
 
@@ -35,29 +42,47 @@ const CHANNEL_LABELS: Record<Channel, string> = {
 
 const CHANNELS: Channel[] = ['coupang', 'naver', 'danawa'];
 
+/** raw 모드용 분 단위 KST 키 — 같은 분에 들어온 다른 채널은 한 점에 합쳐진다 */
+function minuteKeyKST(iso: string): string {
+  const t = Date.parse(iso);
+  const shifted = new Date(t + 9 * 60 * 60_000);
+  // YYYY-MM-DD HH:mm
+  return shifted.toISOString().slice(0, 16).replace('T', ' ');
+}
+
 export default function PriceChart({
   data,
   visibleChannels,
   mode = 'combined',
+  aggregation = 'daily',
   height = 400,
 }: PriceChartProps) {
   const chartData = useMemo(() => {
-    const dateMap = new Map<string, Record<string, number | string>>();
+    const map = new Map<string, Record<string, number | string>>();
     const sorted = [...data].sort(
       (a, b) =>
         new Date(a.collected_at).getTime() - new Date(b.collected_at).getTime()
     );
     for (const log of sorted) {
-      const date = log.collected_at.split('T')[0];
-      if (!dateMap.has(date)) {
-        dateMap.set(date, { date });
+      const key =
+        aggregation === 'daily' ? dateKeyKST(log.collected_at) : minuteKeyKST(log.collected_at);
+      if (!map.has(key)) {
+        map.set(key, { date: key });
       }
-      const entry = dateMap.get(date)!;
-      // 같은 날짜+채널은 가장 최신 값으로 덮어쓰기 (오래된순 정렬이라 마지막이 최신)
-      entry[log.channel] = log.price;
+      const entry = map.get(key)!;
+      const prev = entry[log.channel];
+      if (aggregation === 'daily') {
+        // 같은 날·채널은 최저값 채택 — 이상치는 보통 위로 튀므로 자동 보호
+        if (typeof prev !== 'number' || (log.price as number) < prev) {
+          entry[log.channel] = log.price;
+        }
+      } else {
+        // raw: 같은 분의 같은 채널이면 마지막 값
+        entry[log.channel] = log.price;
+      }
     }
-    return Array.from(dateMap.values());
-  }, [data]);
+    return Array.from(map.values());
+  }, [data, aggregation]);
 
   const activeChannels = useMemo(() => {
     const set = new Set<Channel>();
@@ -126,7 +151,9 @@ export default function PriceChart({
             if (value === undefined || value === null) return ['-'];
             return [Number(value).toLocaleString('ko-KR') + '원'];
           }}
-          labelFormatter={(label) => `날짜: ${label}`}
+          labelFormatter={(label) =>
+            aggregation === 'daily' ? `날짜: ${label}` : `시각: ${label}`
+          }
           contentStyle={{ fontSize: 12 }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -138,7 +165,7 @@ export default function PriceChart({
             name={CHANNEL_LABELS[channel]}
             stroke={CHANNEL_COLORS[channel]}
             strokeWidth={2}
-            dot={{ r: 2 }}
+            dot={{ r: aggregation === 'daily' ? 3 : 2 }}
             activeDot={{ r: 5 }}
             connectNulls
           />

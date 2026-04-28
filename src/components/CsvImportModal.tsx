@@ -128,7 +128,7 @@ export default function CsvImportModal({
       '예시 상품 (이 행은 삭제하고 사용하세요)',
       '예시브랜드',
       'SB-12345',
-      'https://www.coupang.com/vp/products/123456789',
+      'https://www.coupang.com/vp/products/123456789?itemId=987654321&vendorItemId=87654321',
       'https://search.shopping.naver.com/catalog/12345678',
       'https://prod.danawa.com/info/?pcode=1234567',
     ];
@@ -378,6 +378,11 @@ export default function CsvImportModal({
               <code className="bg-gray-100 px-1 rounded">다나와</code>
             </li>
           </ul>
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+            <strong>⚠ 쿠팡 URL 주의:</strong> 상품 페이지에서 <em>옵션(수량/색상 등)을 한 번 클릭</em>한
+            뒤 주소창의 URL을 복사하세요. <code className="bg-white px-1 rounded">vendorItemId</code>{' '}
+            파라미터가 포함되어야 가격이 정상 수집됩니다. 옵션 미선택 URL은 가격 추출이 실패합니다.
+          </div>
           <div className="flex items-center justify-between gap-2 pt-1">
             <button
               type="button"
