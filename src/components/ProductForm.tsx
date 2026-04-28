@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Product, CreateProductInput } from '@/types/database';
 import BrandCombobox from './BrandCombobox';
+import Modal from './Modal';
+import { useToast } from './Toast';
 
 interface ProductFormProps {
   initialData?: Product;
@@ -144,6 +146,7 @@ function normalizeUrl(channel: 'coupang' | 'naver' | 'danawa', raw: string): str
 }
 
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
+  const toast = useToast();
   const [name, setName] = useState(initialData?.name || '');
   const [sabangnetCode, setSabangnetCode] = useState(initialData?.sabangnet_code || '');
   const [brandName, setBrandName] = useState(initialData?.brand_name || '');
@@ -151,6 +154,25 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
   const [naverUrl, setNaverUrl] = useState(initialData?.naver_url || '');
   const [danawaUrl, setDanawaUrl] = useState(initialData?.danawa_url || '');
   const [loading, setLoading] = useState(false);
+
+  // 비동기 흐름 중 사용자 승인이 필요할 때 띄우는 in-form confirm dialog.
+  // window.confirm을 Promise로 감싸서 await 가능하게 만든다.
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
+  const confirmResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const requestConfirm = (title: string, message: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmState({ title, message });
+    });
+  const closeConfirm = (ok: boolean) => {
+    setConfirmState(null);
+    const r = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    r?.(ok);
+  };
 
   const coupangCheck = validateUrl('coupang', coupangUrl);
   const naverCheck = validateUrl('naver', naverUrl);
@@ -161,7 +183,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
     e.preventDefault();
     if (!name.trim()) return;
     if (hasAnyError) {
-      window.alert('URL 형식 오류가 있는 채널이 있습니다. 빨간색 메시지를 확인하세요.');
+      toast.error('URL 형식 오류가 있는 채널이 있습니다. 빨간색 메시지를 확인하세요.');
       return;
     }
 
@@ -213,8 +235,9 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
                     `· ${FIELD_LABELS[d.matchedField ?? ''] ?? d.matchedField}: "${d.productName}"`
                 )
                 .join('\n');
-              window.alert(
-                `다음 URL이 이미 다른 상품에 등록되어 있어 저장할 수 없습니다.\n\n${lines}\n\n해당 상품을 수정하거나, 다른 URL을 사용하세요.`
+              toast.error(
+                `다음 URL이 이미 다른 상품에 등록되어 있어 저장할 수 없습니다.\n\n${lines}\n\n해당 상품을 수정하거나, 다른 URL을 사용하세요.`,
+                7000
               );
               setLoading(false);
               return;
@@ -224,7 +247,8 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
             //    현재 상품에만 재부여 (ownership 이전)
             if (r?.status === 'sabangnet_conflict') {
               const other = r.duplicates.find((d) => d.kind === 'sabangnetMatch');
-              const ok = window.confirm(
+              const ok = await requestConfirm(
+                '사방넷코드 충돌',
                 `사방넷코드 "${payload.sabangnet_code}"가 이미 "${other?.productName ?? '다른 상품'}"에 등록되어 있습니다.\n\n` +
                   `승인하면 "${other?.productName ?? '해당 상품'}"의 사방넷코드를 제거하고 이 상품에 이전합니다.\n\n계속할까요?`
               );
@@ -242,14 +266,14 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
                   });
                   if (!clearRes.ok) {
                     const body = await clearRes.json().catch(() => ({}));
-                    window.alert(
+                    toast.error(
                       `기존 상품의 사방넷코드 제거에 실패했습니다: ${body.error ?? clearRes.statusText}`
                     );
                     setLoading(false);
                     return;
                   }
                 } catch {
-                  window.alert(
+                  toast.error(
                     '기존 상품의 사방넷코드 제거 중 네트워크 오류가 발생했습니다. 다시 시도해주세요.'
                   );
                   setLoading(false);
@@ -355,6 +379,35 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           </button>
         )}
       </div>
+
+      <Modal
+        open={confirmState !== null}
+        onClose={() => closeConfirm(false)}
+        title={confirmState?.title}
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700 whitespace-pre-line">
+            {confirmState?.message}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => closeConfirm(false)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={() => closeConfirm(true)}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              계속
+            </button>
+          </div>
+        </div>
+      </Modal>
     </form>
   );
 }

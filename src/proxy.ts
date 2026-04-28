@@ -8,8 +8,10 @@ import { NextResponse, type NextRequest } from 'next/server';
  *
  * 둘 중 하나라도 비어 있으면 게이트를 우회 (로컬 개발 / 점진 롤아웃 편의).
  * 인증 성공 시 세션 토큰을 쿠키에 굽지 않고 매 요청마다 헤더로 재확인한다.
+ *
+ * Next 16: `middleware` 파일 컨벤션이 deprecated 되어 `proxy` 함수로 이전.
  */
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const username = process.env.DASHBOARD_USERNAME;
   const password = process.env.DASHBOARD_PASSWORD;
 

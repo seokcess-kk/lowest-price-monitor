@@ -177,17 +177,23 @@ interface SortableHeaderProps {
 function SortableHeader({ label, active, dir, onClick, align = 'left' }: SortableHeaderProps) {
   const alignClass =
     align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
+  const ariaSort = active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none';
   return (
     <th
-      className={`px-4 py-3 ${alignClass} text-sm font-semibold text-gray-700 cursor-pointer select-none hover:bg-gray-100`}
-      onClick={onClick}
+      scope="col"
+      aria-sort={ariaSort}
+      className={`px-4 py-3 ${alignClass} text-sm font-semibold text-gray-700`}
     >
-      <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 select-none hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+      >
         {label}
-        <span className={`text-xs ${active ? 'text-blue-600' : 'text-gray-300'}`}>
+        <span className={`text-xs ${active ? 'text-blue-600' : 'text-gray-300'}`} aria-hidden>
           {active ? (dir === 'asc' ? '▲' : '▼') : '⇅'}
         </span>
-      </span>
+      </button>
     </th>
   );
 }
@@ -227,8 +233,19 @@ function RowGroup({
         className="border-b hover:bg-blue-50/30 cursor-pointer transition-colors"
         onClick={onToggle}
       >
-        <td className="px-2 py-3 text-center text-gray-400 text-xs">
-          {isExpanded ? '▼' : '▶'}
+        <td className="px-2 py-3 text-center">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            aria-expanded={isExpanded}
+            aria-label={isExpanded ? '채널 상세 닫기' : '채널 상세 펼치기'}
+            className="text-gray-400 hover:text-blue-600 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+          >
+            {isExpanded ? '▼' : '▶'}
+          </button>
         </td>
         <td className="px-4 py-3">
           <div className="flex flex-col gap-0.5">

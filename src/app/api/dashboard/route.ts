@@ -6,6 +6,12 @@ import type {
   ChannelPrice,
   FailureWarning,
 } from '@/types/database';
+import {
+  dateKeyKST,
+  daysAgoKeyKST,
+  startOfDayKstISO,
+  endOfDayKstISO,
+} from '@/lib/date-utils';
 
 export interface DashboardResponse {
   latest: PriceWithChange[];
@@ -78,19 +84,16 @@ async function buildLatest(
   }>,
   productIds: string[]
 ): Promise<PriceWithChange[]> {
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const todayStr = dateKeyKST();
+  const yesterdayStr = daysAgoKeyKST(1);
 
   const { data: logs, error: logError } = await supabase
     .from('price_logs')
     .select('*')
     .in('product_id', productIds)
     .eq('is_suspicious', false)
-    .gte('collected_at', yesterdayStr)
-    .lte('collected_at', todayStr + 'T23:59:59.999Z')
+    .gte('collected_at', startOfDayKstISO(yesterdayStr))
+    .lte('collected_at', endOfDayKstISO(todayStr))
     .order('collected_at', { ascending: false });
 
   if (logError) throw new Error(logError.message);
@@ -107,13 +110,27 @@ async function buildLatest(
   }
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: recentErrors } = await supabase
-    .from('scrape_errors')
-    .select('product_id, channel, created_at')
-    .in('product_id', productIds)
-    .gte('created_at', sevenDaysAgo)
-    .order('created_at', { ascending: false })
-    .limit(500);
+  // (product_id, channel) 그룹별 최근 10건만 받는 RPC. 상품 수가 늘어도 누락 없음.
+  // RPC 미적용 환경에서는 fallback으로 limit 쿼리 사용.
+  type ErrorRow = { product_id: string; channel: string; created_at: string };
+  let recentErrors: ErrorRow[] = [];
+  const { data: rpcRows, error: rpcErr } = await supabase.rpc('recent_failures_per_channel', {
+    p_since: sevenDaysAgo,
+    p_product_ids: productIds,
+    p_per_group: 10,
+  });
+  if (!rpcErr && Array.isArray(rpcRows)) {
+    recentErrors = rpcRows as ErrorRow[];
+  } else {
+    const { data: fallback } = await supabase
+      .from('scrape_errors')
+      .select('product_id, channel, created_at')
+      .in('product_id', productIds)
+      .gte('created_at', sevenDaysAgo)
+      .order('created_at', { ascending: false })
+      .limit(2000);
+    recentErrors = (fallback ?? []) as ErrorRow[];
+  }
 
   const failureMap = new Map<string, number>();
   if (recentErrors) {
@@ -147,9 +164,9 @@ async function buildLatest(
       let todayLog: LogRow | undefined;
       let yesterdayLog: LogRow | undefined;
       for (const l of channelLogs) {
-        if (!todayLog && l.collected_at.startsWith(todayStr)) todayLog = l;
-        else if (!yesterdayLog && l.collected_at.startsWith(yesterdayStr))
-          yesterdayLog = l;
+        const key = dateKeyKST(l.collected_at);
+        if (!todayLog && key === todayStr) todayLog = l;
+        else if (!yesterdayLog && key === yesterdayStr) yesterdayLog = l;
         if (todayLog && yesterdayLog) break;
       }
 
@@ -201,30 +218,25 @@ async function buildSparklines(
   productIds: string[],
   days: number
 ): Promise<Record<string, number[]>> {
-  const since = new Date();
-  since.setUTCHours(0, 0, 0, 0);
-  since.setUTCDate(since.getUTCDate() - (days - 1));
+  const sinceKey = daysAgoKeyKST(days - 1);
 
   const { data: logs, error: logError } = await supabase
     .from('price_logs')
     .select('product_id, price, collected_at')
     .in('product_id', productIds)
     .eq('is_suspicious', false)
-    .gte('collected_at', since.toISOString());
+    .gte('collected_at', startOfDayKstISO(sinceKey));
 
   if (logError) throw new Error(logError.message);
 
   const dayKeys: string[] = [];
   for (let i = days - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setUTCHours(0, 0, 0, 0);
-    d.setUTCDate(d.getUTCDate() - i);
-    dayKeys.push(d.toISOString().split('T')[0]);
+    dayKeys.push(daysAgoKeyKST(i));
   }
 
   const grouped = new Map<string, Map<string, number>>();
   for (const log of logs ?? []) {
-    const day = (log.collected_at as string).split('T')[0];
+    const day = dateKeyKST(log.collected_at as string);
     if (!grouped.has(log.product_id)) grouped.set(log.product_id, new Map());
     const dayMap = grouped.get(log.product_id)!;
     const prev = dayMap.get(day);

@@ -1,12 +1,31 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { usePriceHistory } from '@/hooks/usePriceHistory';
 import PriceChart from '@/components/PriceChart';
 import PriceChangeIndicator from '@/components/PriceChangeIndicator';
 import { ChartSkeleton } from '@/components/Skeleton';
 import type { Channel, PriceLog, Product } from '@/types/database';
+
+interface ChannelErrorSummary {
+  channel: Channel;
+  consecutive_failures: number;
+  last_failure_at: string;
+  last_success_at: string | null;
+}
+
+function formatRelativeShort(iso: string | null): string {
+  if (!iso) return '없음';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '없음';
+  const diff = Date.now() - t;
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return '방금';
+  if (min < 60) return `${min}분 전`;
+  if (min < 60 * 24) return `${Math.floor(min / 60)}시간 전`;
+  return `${Math.floor(min / (60 * 24))}일 전`;
+}
 
 type Period = '7d' | '30d' | '90d' | 'all';
 type ChartMode = 'combined' | 'split';
@@ -73,6 +92,22 @@ export default function ProductDetailClient({
     initialHistory
   );
 
+  // 채널별 마지막 실패 정보 — 헤더의 수집 상태 라인에 표시
+  const [channelErrors, setChannelErrors] = useState<ChannelErrorSummary[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/errors?group_by=product_channel&product_id=${productId}`)
+      .then((r) => r.json())
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setChannelErrors(rows as ChannelErrorSummary[]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [productId]);
+
   // 채널별 최신/이전 가격 (헤더용)
   const channelLatest = useMemo(() => {
     const map: Partial<Record<Channel, { latest: PriceLog; previous?: PriceLog }>> = {};
@@ -103,6 +138,37 @@ export default function ProductDetailClient({
     }
     return cheapest;
   }, [channelLatest]);
+
+  // "최근 N일 최저가 갱신" 배지 — 현재 overall 가격이 기간 내 최소면 표시
+  const lowestRecord = useMemo(() => {
+    if (!overall) return null;
+    if (data.length === 0) return null;
+    const min = data.reduce((m, l) => (l.price < m.price ? l : m));
+    if (overall.latest.price <= min.price) {
+      const days = period === '7d' ? 7 : period === '30d' ? 30 : period === '90d' ? 90 : null;
+      return { days };
+    }
+    return null;
+  }, [data, overall, period]);
+
+  // 채널별 마지막 성공 시각 — initialHistory 기준
+  const lastSuccessByChannel = useMemo(() => {
+    const map: Partial<Record<Channel, string>> = {};
+    for (const ch of CHANNELS) {
+      const entry = channelLatest[ch];
+      if (entry) map[ch] = entry.latest.collected_at;
+    }
+    return map;
+  }, [channelLatest]);
+
+  // 채널별 마지막 실패 — channelErrors index
+  const errorByChannel = useMemo(() => {
+    const map: Partial<Record<Channel, ChannelErrorSummary>> = {};
+    for (const e of channelErrors) {
+      map[e.channel] = e;
+    }
+    return map;
+  }, [channelErrors]);
 
   // 기간 내 KPI 통계
   const stats = useMemo(() => {
@@ -271,7 +337,7 @@ export default function ProductDetailClient({
                     />
                   )}
                 </div>
-                <div className="mt-1">
+                <div className="mt-1 flex items-center gap-2 flex-wrap">
                   <span
                     className="text-xs font-bold px-2 py-0.5 rounded text-white inline-block"
                     style={{ backgroundColor: CHANNEL_COLORS[overall.channel] }}
@@ -280,6 +346,11 @@ export default function ProductDetailClient({
                     {overall.latest.store_name &&
                       ` · ${overall.latest.store_name}`}
                   </span>
+                  {lowestRecord && (
+                    <span className="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-0.5">
+                      🏆 {lowestRecord.days ? `${lowestRecord.days}일` : '전체 기간'} 최저가 갱신
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -288,12 +359,18 @@ export default function ProductDetailClient({
                   const entry = channelLatest[ch];
                   const url = product[`${ch}_url` as const];
                   const isCheapest = overall.channel === ch;
+                  const lastSuccess = lastSuccessByChannel[ch] ?? null;
+                  const errInfo = errorByChannel[ch];
+                  const hasOpenError =
+                    !!errInfo && errInfo.consecutive_failures > 0;
                   const inner = (
                     <div
                       className={`px-2 sm:px-3 py-2 rounded border lg:min-w-[140px] h-full ${
-                        isCheapest
-                          ? 'border-yellow-400 bg-yellow-50/40'
-                          : 'border-gray-200 bg-white'
+                        hasOpenError
+                          ? 'border-red-300 bg-red-50/40'
+                          : isCheapest
+                            ? 'border-yellow-400 bg-yellow-50/40'
+                            : 'border-gray-200 bg-white'
                       }`}
                     >
                       <div
@@ -313,6 +390,17 @@ export default function ProductDetailClient({
                       ) : (
                         <div className="text-xs sm:text-sm text-gray-400 mt-0.5">없음</div>
                       )}
+                      <div className="mt-1 text-[10px] leading-tight space-y-0.5">
+                        <div className="text-gray-500">
+                          ✓ {formatRelativeShort(lastSuccess)}
+                        </div>
+                        {hasOpenError && (
+                          <div className="text-red-600 font-medium">
+                            ⚠ {errInfo.consecutive_failures}회 실패 ·{' '}
+                            {formatRelativeShort(errInfo.last_failure_at)}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                   return url ? (

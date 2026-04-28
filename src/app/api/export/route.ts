@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
     const brandIdsParam = searchParams.get('brand_ids');
     const mode = searchParams.get('mode') === 'daily' ? 'daily' : 'raw';
     const includeSuspicious = searchParams.get('include_suspicious') === 'true';
+    const countOnly = searchParams.get('count_only') === 'true';
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'start_date와 end_date는 필수입니다.' }, { status: 400 });
@@ -34,6 +35,29 @@ export async function GET(request: NextRequest) {
           return NextResponse.json([]);
         }
       }
+    }
+
+    if (countOnly) {
+      // raw 모드는 단순 row count, daily는 group-by 결과 크기 추정 (정확한 값은 부담)
+      let countQuery = supabase
+        .from('price_logs')
+        .select('*', { count: 'exact', head: true })
+        .gte('collected_at', startDate)
+        .lte('collected_at', endDate + 'T23:59:59.999Z');
+      if (!includeSuspicious) countQuery = countQuery.eq('is_suspicious', false);
+      if (productIdsParam) {
+        countQuery = countQuery.in(
+          'product_id',
+          productIdsParam.split(',').map((id) => id.trim())
+        );
+      } else if (resolvedProductIds) {
+        countQuery = countQuery.in('product_id', resolvedProductIds);
+      }
+      const { count, error: countErr } = await countQuery;
+      if (countErr) {
+        return NextResponse.json({ error: countErr.message }, { status: 500 });
+      }
+      return NextResponse.json({ rawCount: count ?? 0, mode });
     }
 
     let query = supabase
