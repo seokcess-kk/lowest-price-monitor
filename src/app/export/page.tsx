@@ -3,12 +3,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProducts } from '@/hooks/useProducts';
 import DateRangePicker from '@/components/DateRangePicker';
+import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import { exportToExcel } from '@/lib/export';
 
 interface ExportRow {
   date: string;
   productName: string;
   sabangnetCode: string | null;
+  brandName: string | null;
   channel: string;
   price: number;
   storeName: string | null;
@@ -42,6 +44,7 @@ export default function ExportPage() {
 
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [brandSelection, setBrandSelection] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<'raw' | 'daily'>('raw');
 
   // localStorage에서 마지막 선택 복원
@@ -69,10 +72,29 @@ export default function ExportPage() {
     return products.filter((p) => {
       if (activeFilter === 'active' && !p.is_active) return false;
       if (activeFilter === 'inactive' && p.is_active) return false;
-      if (q && !p.name.toLowerCase().includes(q)) return false;
+      if (q) {
+        const nameHit = p.name.toLowerCase().includes(q);
+        const brandHit = (p.brand_name ?? '').toLowerCase().includes(q);
+        if (!nameHit && !brandHit) return false;
+      }
+      if (brandSelection.size > 0) {
+        if (p.brand_id) {
+          if (!brandSelection.has(p.brand_id)) return false;
+        } else if (!brandSelection.has(UNCATEGORIZED_BRAND_ID)) return false;
+      }
       return true;
     });
-  }, [products, search, activeFilter]);
+  }, [products, search, activeFilter, brandSelection]);
+
+  const brandCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    let uncategorized = 0;
+    for (const p of products) {
+      if (p.brand_id) map[p.brand_id] = (map[p.brand_id] ?? 0) + 1;
+      else uncategorized++;
+    }
+    return { byId: map, uncategorized };
+  }, [products]);
 
   const selectAll = selectedIds.size === 0;
 
@@ -193,12 +215,12 @@ export default function ExportPage() {
         ) : (
           <>
             {/* 검색 + 필터 */}
-            <div className="flex flex-wrap gap-2 mb-3">
+            <div className="flex flex-wrap gap-2 mb-3 items-center">
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="상품명 검색..."
+                placeholder="상품명·브랜드 검색..."
                 className="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-md text-sm"
               />
               <div className="flex gap-1">
@@ -216,6 +238,12 @@ export default function ExportPage() {
                   </button>
                 ))}
               </div>
+              <BrandFilter
+                selected={brandSelection}
+                onChange={setBrandSelection}
+                counts={brandCounts.byId}
+                uncategorizedCount={brandCounts.uncategorized}
+              />
             </div>
 
             {/* 빠른 액션 */}
@@ -273,7 +301,14 @@ export default function ExportPage() {
                         onChange={() => toggleProduct(product.id)}
                         className="w-4 h-4"
                       />
-                      <span className="flex-1 text-sm text-gray-800 truncate">{product.name}</span>
+                      <span className="flex-1 text-sm text-gray-800 truncate">
+                        {product.brand_name && (
+                          <span className="text-[10px] font-semibold text-purple-700 mr-1.5">
+                            [{product.brand_name}]
+                          </span>
+                        )}
+                        {product.name}
+                      </span>
                       {!product.is_active && (
                         <span className="px-1.5 py-0.5 text-[10px] bg-gray-200 text-gray-600 rounded">
                           비활성

@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('start_date');
     const endDate = searchParams.get('end_date');
     const productIdsParam = searchParams.get('product_ids');
+    const brandIdsParam = searchParams.get('brand_ids');
     const mode = searchParams.get('mode') === 'daily' ? 'daily' : 'raw';
     const includeSuspicious = searchParams.get('include_suspicious') === 'true';
 
@@ -16,9 +17,28 @@ export async function GET(request: NextRequest) {
 
     const supabase = createServiceClient();
 
+    // brand 필터는 products 테이블 기준이라 nested select inner-filter가 필요 → 사전 조회로 product_id 좁힘
+    let resolvedProductIds: string[] | null = null;
+    if (brandIdsParam) {
+      const ids = brandIdsParam.split(',').map((s) => s.trim()).filter(Boolean);
+      if (ids.length > 0) {
+        const { data: filteredProducts, error: pErr } = await supabase
+          .from('products')
+          .select('id')
+          .in('brand_id', ids);
+        if (pErr) {
+          return NextResponse.json({ error: pErr.message }, { status: 500 });
+        }
+        resolvedProductIds = (filteredProducts ?? []).map((p) => p.id as string);
+        if (resolvedProductIds.length === 0) {
+          return NextResponse.json([]);
+        }
+      }
+    }
+
     let query = supabase
       .from('price_logs')
-      .select('*, products(name, sabangnet_code)')
+      .select('*, products(name, sabangnet_code, brand:brands(name))')
       .gte('collected_at', startDate)
       .lte('collected_at', endDate + 'T23:59:59.999Z')
       .order('collected_at', { ascending: true });
@@ -29,6 +49,8 @@ export async function GET(request: NextRequest) {
     if (productIdsParam) {
       const productIds = productIdsParam.split(',').map((id) => id.trim());
       query = query.in('product_id', productIds);
+    } else if (resolvedProductIds) {
+      query = query.in('product_id', resolvedProductIds);
     }
 
     const { data, error } = await query;
@@ -38,11 +60,14 @@ export async function GET(request: NextRequest) {
     }
 
     const rows = (data || []).map((row: Record<string, unknown>) => {
-      const products = row.products as { name: string; sabangnet_code: string | null } | null;
+      const products = row.products as
+        | { name: string; sabangnet_code: string | null; brand: { name: string } | null }
+        | null;
       return {
         date: (row.collected_at as string).split('T')[0],
         productName: products?.name || '',
         sabangnetCode: products?.sabangnet_code ?? null,
+        brandName: products?.brand?.name ?? null,
         channel: row.channel as string,
         price: row.price as number,
         storeName: (row.store_name as string) || null,

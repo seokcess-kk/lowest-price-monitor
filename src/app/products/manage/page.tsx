@@ -6,6 +6,7 @@ import { useProducts } from '@/hooks/useProducts';
 import ProductForm from '@/components/ProductForm';
 import Modal from '@/components/Modal';
 import SearchInput from '@/components/SearchInput';
+import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import { ProductRowSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
 import type { Product, CreateProductInput, Channel } from '@/types/database';
@@ -40,6 +41,7 @@ export default function ManageProductsPage() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [brandSelection, setBrandSelection] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -61,10 +63,16 @@ export default function ManageProductsPage() {
       if (q) {
         const nameHit = p.name.toLowerCase().includes(q);
         const codeHit = (p.sabangnet_code ?? '').toLowerCase().includes(q);
-        if (!nameHit && !codeHit) return false;
+        const brandHit = (p.brand_name ?? '').toLowerCase().includes(q);
+        if (!nameHit && !codeHit && !brandHit) return false;
       }
       if (statusFilter === 'active' && !p.is_active) return false;
       if (statusFilter === 'inactive' && p.is_active) return false;
+      if (brandSelection.size > 0) {
+        if (p.brand_id) {
+          if (!brandSelection.has(p.brand_id)) return false;
+        } else if (!brandSelection.has(UNCATEGORIZED_BRAND_ID)) return false;
+      }
       return true;
     });
     list.sort((a, b) => {
@@ -77,7 +85,7 @@ export default function ManageProductsPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return list;
-  }, [products, search, statusFilter, sortKey, sortDir]);
+  }, [products, search, statusFilter, brandSelection, sortKey, sortDir]);
 
   const counts = useMemo(
     () => ({
@@ -87,6 +95,16 @@ export default function ManageProductsPage() {
     }),
     [products]
   );
+
+  const brandCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    let uncategorized = 0;
+    for (const p of products) {
+      if (p.brand_id) map[p.brand_id] = (map[p.brand_id] ?? 0) + 1;
+      else uncategorized++;
+    }
+    return { byId: map, uncategorized };
+  }, [products]);
 
   const allVisibleSelected =
     filtered.length > 0 && filtered.every((p) => selected.has(p.id));
@@ -311,6 +329,12 @@ export default function ManageProductsPage() {
             onClick={() => setStatusFilter('inactive')}
           />
         </div>
+        <BrandFilter
+          selected={brandSelection}
+          onChange={setBrandSelection}
+          counts={brandCounts.byId}
+          uncategorizedCount={brandCounts.uncategorized}
+        />
       </div>
 
       {/* 일괄 작업 바 — 데스크톱: 인라인, 모바일: sticky bottom */}
@@ -671,7 +695,14 @@ function ProductRow({
           onClick={onToggleExpand}
         >
           <div className="flex flex-col">
-            <span className="font-medium text-gray-900">{product.name}</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {product.brand_name && (
+                <span className="text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5">
+                  {product.brand_name}
+                </span>
+              )}
+              <span className="font-medium text-gray-900">{product.name}</span>
+            </div>
             {product.sabangnet_code && (
               <span className="text-[11px] text-gray-500 font-mono">
                 사방넷 {product.sabangnet_code}
@@ -817,9 +848,16 @@ function ProductCardMobile({
             className="flex-1 text-left min-w-0"
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="font-medium text-gray-900 break-keep flex-1">
-                {product.name}
-              </span>
+              <div className="flex items-center gap-1.5 flex-wrap flex-1">
+                {product.brand_name && (
+                  <span className="text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5">
+                    {product.brand_name}
+                  </span>
+                )}
+                <span className="font-medium text-gray-900 break-keep">
+                  {product.name}
+                </span>
+              </div>
               <span className="text-gray-400 text-xs shrink-0">
                 {isExpanded ? '▼' : '▶'}
               </span>

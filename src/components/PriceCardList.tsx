@@ -60,12 +60,19 @@ export default function PriceCardList({
             className="rounded-lg border border-gray-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition"
           >
             <div className="flex items-start justify-between gap-2 mb-3">
-              <Link
-                href={`/products/${item.product_id}`}
-                className="text-blue-600 hover:underline font-medium text-sm leading-tight flex-1"
-              >
-                {item.product_name}
-              </Link>
+              <div className="flex-1 min-w-0">
+                {item.brand_name && (
+                  <div className="text-[10px] font-semibold text-purple-700 mb-0.5">
+                    {item.brand_name}
+                  </div>
+                )}
+                <Link
+                  href={`/products/${item.product_id}`}
+                  className="text-blue-600 hover:underline font-medium text-sm leading-tight"
+                >
+                  {item.product_name}
+                </Link>
+              </div>
               <div className="flex items-center gap-1 shrink-0">
                 {failureCount > 0 && (
                   <span className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5">

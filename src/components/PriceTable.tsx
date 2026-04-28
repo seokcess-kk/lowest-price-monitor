@@ -231,22 +231,29 @@ function RowGroup({
           {isExpanded ? '▼' : '▶'}
         </td>
         <td className="px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Link
-              href={`/products/${item.product_id}`}
-              className="text-blue-600 hover:underline font-medium"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {item.product_name}
-            </Link>
-            {hasFailures && (
-              <span
-                className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"
-                title={`${item.warnings!.length}개 채널 수집 실패`}
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              {item.brand_name && (
+                <span className="text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-1.5 py-0.5">
+                  {item.brand_name}
+                </span>
+              )}
+              <Link
+                href={`/products/${item.product_id}`}
+                className="text-blue-600 hover:underline font-medium"
+                onClick={(e) => e.stopPropagation()}
               >
-                ⚠ {item.warnings!.length}
-              </span>
-            )}
+                {item.product_name}
+              </Link>
+              {hasFailures && (
+                <span
+                  className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"
+                  title={`${item.warnings!.length}개 채널 수집 실패`}
+                >
+                  ⚠ {item.warnings!.length}
+                </span>
+              )}
+            </div>
           </div>
         </td>
         <td className="px-4 py-3 text-right">

@@ -24,14 +24,20 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const days = Math.max(2, Math.min(parseInt(searchParams.get('days') || '7', 10), 30));
+    const brandIdsParam = searchParams.get('brand_ids');
 
     const supabase = createServiceClient();
 
-    const { data: products, error: prodError } = await supabase
+    let prodQuery = supabase
       .from('products')
-      .select('*')
+      .select('*, brand:brands(id, name)')
       .eq('is_active', true)
       .order('created_at', { ascending: false });
+    if (brandIdsParam) {
+      const ids = brandIdsParam.split(',').map((s) => s.trim()).filter(Boolean);
+      if (ids.length > 0) prodQuery = prodQuery.in('brand_id', ids);
+    }
+    const { data: products, error: prodError } = await prodQuery;
 
     if (prodError) {
       return NextResponse.json({ error: prodError.message }, { status: 500 });
@@ -64,6 +70,8 @@ async function buildLatest(
     id: string;
     name: string;
     sabangnet_code: string | null;
+    brand_id: string | null;
+    brand?: { id: string; name: string } | null;
     coupang_url: string | null;
     naver_url: string | null;
     danawa_url: string | null;
@@ -175,6 +183,8 @@ async function buildLatest(
       product_id: product.id,
       product_name: product.name,
       sabangnet_code: product.sabangnet_code ?? null,
+      brand_id: product.brand_id ?? null,
+      brand_name: product.brand?.name ?? null,
       urls: {
         coupang: product.coupang_url,
         naver: product.naver_url,

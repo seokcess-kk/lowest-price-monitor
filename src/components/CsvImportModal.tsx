@@ -17,6 +17,7 @@ interface ParsedRow {
   rowIndex: number;
   name: string;
   sabangnet_code: string | null;
+  brand_name: string | null;
   coupang_url: string | null;
   naver_url: string | null;
   danawa_url: string | null;
@@ -29,6 +30,8 @@ interface CsvImportModalProps {
   onImported: () => void;
 }
 
+type BrandStatus = 'matched' | 'new' | 'empty';
+
 interface DupResult {
   rowIndex: number;
   status: 'new' | 'duplicate' | 'similar' | 'sabangnet_conflict';
@@ -38,6 +41,12 @@ interface DupResult {
     productName: string;
     matchedField?: 'coupang_url' | 'naver_url' | 'danawa_url' | 'sabangnet_code';
   }>;
+  brand: {
+    status: BrandStatus;
+    matchedBrandId?: string;
+    matchedBrandName?: string;
+    inputName?: string;
+  };
 }
 
 type Step = 'upload' | 'preview' | 'submitting' | 'done';
@@ -65,6 +74,7 @@ function normalizeSheetRow(
     '사방넷',
     '사방넷 코드',
   ]);
+  const brand = get(['brand', 'brand_name', '브랜드', '브랜드명', '제조사']);
   const coupang = get(['coupang_url', 'coupang', '쿠팡', '쿠팡url']);
   const naver = get(['naver_url', 'naver', '네이버', '네이버url']);
   const danawa = get(['danawa_url', 'danawa', '다나와', '다나와url']);
@@ -73,6 +83,7 @@ function normalizeSheetRow(
     rowIndex,
     name,
     sabangnet_code: sabangnet || null,
+    brand_name: brand || null,
     coupang_url: coupang || null,
     naver_url: naver || null,
     danawa_url: danawa || null,
@@ -106,14 +117,16 @@ export default function CsvImportModal({
   const [error, setError] = useState<string | null>(null);
   const [includeSimilar, setIncludeSimilar] = useState(true);
   const [includeSabangnetConflict, setIncludeSabangnetConflict] = useState(false);
+  const [createMissingBrands, setCreateMissingBrands] = useState(true);
   const [createdCount, setCreatedCount] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const downloadTemplate = async () => {
     const XLSX = await loadXlsx();
-    const headers = ['name', 'sabangnet_code', 'coupang_url', 'naver_url', 'danawa_url'];
+    const headers = ['name', 'brand', 'sabangnet_code', 'coupang_url', 'naver_url', 'danawa_url'];
     const example = [
       '예시 상품 (이 행은 삭제하고 사용하세요)',
+      '예시브랜드',
       'SB-12345',
       'https://www.coupang.com/vp/products/123456789',
       'https://search.shopping.naver.com/catalog/12345678',
@@ -122,8 +135,10 @@ export default function CsvImportModal({
 
     const ws = XLSX.utils.aoa_to_sheet([headers, example]);
 
-    // 열 너비 — 사방넷코드 150, 나머지 300
-    ws['!cols'] = headers.map((h) => ({ wpx: h === 'sabangnet_code' ? 150 : 300 }));
+    // 열 너비 — 사방넷코드/브랜드 150, 나머지 300
+    ws['!cols'] = headers.map((h) =>
+      h === 'sabangnet_code' || h === 'brand' ? { wpx: 150 } : { wpx: 300 }
+    );
 
     // 헤더 셀(A1~D1) bold + 음영
     const headerStyle = {
@@ -169,6 +184,7 @@ export default function CsvImportModal({
     setError(null);
     setIncludeSimilar(true);
     setIncludeSabangnetConflict(false);
+    setCreateMissingBrands(true);
     setCreatedCount(0);
     if (fileRef.current) fileRef.current.value = '';
   };
@@ -206,6 +222,7 @@ export default function CsvImportModal({
         rowIndex: r.rowIndex,
         name: r.name,
         sabangnet_code: r.sabangnet_code,
+        brand_name: r.brand_name,
         coupang_url: r.coupang_url,
         naver_url: r.naver_url,
         danawa_url: r.danawa_url,
@@ -238,6 +255,10 @@ export default function CsvImportModal({
     let similar = 0;
     let sabangnetConflict = 0;
     let errors = 0;
+    let brandMatched = 0;
+    let brandNew = 0;
+    let brandEmpty = 0;
+    const newBrandKeys = new Map<string, string>(); // 정규화 키 → 표기
     for (const r of rows) {
       if (r.error) {
         errors++;
@@ -248,8 +269,28 @@ export default function CsvImportModal({
       else if (dup.status === 'duplicate') duplicate++;
       else if (dup.status === 'sabangnet_conflict') sabangnetConflict++;
       else if (dup.status === 'similar') similar++;
+
+      const bs = dup?.brand?.status ?? (r.brand_name ? 'new' : 'empty');
+      if (bs === 'matched') brandMatched++;
+      else if (bs === 'new') {
+        brandNew++;
+        if (r.brand_name) {
+          const k = r.brand_name.trim().toLowerCase();
+          if (!newBrandKeys.has(k)) newBrandKeys.set(k, r.brand_name.trim());
+        }
+      } else brandEmpty++;
     }
-    return { newCount, duplicate, similar, sabangnetConflict, errors };
+    return {
+      newCount,
+      duplicate,
+      similar,
+      sabangnetConflict,
+      errors,
+      brandMatched,
+      brandNew,
+      brandEmpty,
+      newBrandList: Array.from(newBrandKeys.values()),
+    };
   })();
 
   const willInsertCount =
@@ -271,6 +312,7 @@ export default function CsvImportModal({
       .map((r) => ({
         name: r.name,
         sabangnet_code: r.sabangnet_code,
+        brand_name: r.brand_name,
         coupang_url: r.coupang_url,
         naver_url: r.naver_url,
         danawa_url: r.danawa_url,
@@ -286,7 +328,7 @@ export default function CsvImportModal({
       const res = await fetch('/api/products/bulk-create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items, createMissingBrands }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -314,6 +356,10 @@ export default function CsvImportModal({
             <li>
               <code className="bg-gray-100 px-1 rounded">name</code> 또는{' '}
               <code className="bg-gray-100 px-1 rounded">상품명</code> (필수)
+            </li>
+            <li>
+              <code className="bg-gray-100 px-1 rounded">brand</code> /{' '}
+              <code className="bg-gray-100 px-1 rounded">브랜드</code> (선택)
             </li>
             <li>
               <code className="bg-gray-100 px-1 rounded">sabangnet_code</code> /{' '}
@@ -387,6 +433,40 @@ export default function CsvImportModal({
             </div>
           </div>
 
+          {/* 브랜드 처리 요약 */}
+          <div className="rounded border border-gray-200 bg-gray-50 p-3 space-y-2">
+            <div className="text-xs font-semibold text-gray-700">브랜드 처리</div>
+            <div className="flex flex-wrap gap-3 text-xs text-gray-700">
+              <span>✓ 기존 매칭: <strong>{summary.brandMatched}</strong></span>
+              <span className="text-blue-700">🆕 신규: <strong>{summary.brandNew}</strong></span>
+              <span className="text-gray-500">미분류: <strong>{summary.brandEmpty}</strong></span>
+            </div>
+            {summary.newBrandList.length > 0 && (
+              <>
+                <div className="flex flex-wrap gap-1">
+                  {summary.newBrandList.map((b) => (
+                    <span
+                      key={b}
+                      className="inline-block px-1.5 py-0.5 text-[11px] bg-blue-50 text-blue-700 border border-blue-200 rounded"
+                    >
+                      {b}
+                    </span>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={createMissingBrands}
+                    onChange={(e) => setCreateMissingBrands(e.target.checked)}
+                  />
+                  <span>
+                    위 신규 브랜드 {summary.newBrandList.length}개를 새로 추가 (해제 시 미분류로 등록)
+                  </span>
+                </label>
+              </>
+            )}
+          </div>
+
           {summary.sabangnetConflict > 0 && (
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -418,6 +498,7 @@ export default function CsvImportModal({
                 <tr>
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">상품명</th>
+                  <th className="px-2 py-1 text-left">브랜드</th>
                   <th className="px-2 py-1 text-center">상태</th>
                   <th className="px-2 py-1 text-left">비고</th>
                 </tr>
@@ -446,10 +527,24 @@ export default function CsvImportModal({
                     badge = { text: '이름 유사', color: 'bg-yellow-100 text-yellow-700' };
                     note = `기존: ${dup.duplicates[0]?.productName ?? ''}`;
                   }
+                  const brandStatus = dup?.brand?.status ?? (r.brand_name ? 'new' : 'empty');
+                  const brandLabel =
+                    brandStatus === 'matched'
+                      ? `${dup?.brand?.matchedBrandName ?? r.brand_name} (기존)`
+                      : brandStatus === 'new'
+                        ? `${r.brand_name} (신규)`
+                        : '-';
+                  const brandClass =
+                    brandStatus === 'matched'
+                      ? 'text-green-700'
+                      : brandStatus === 'new'
+                        ? 'text-blue-700'
+                        : 'text-gray-400';
                   return (
                     <tr key={r.rowIndex} className="border-t border-gray-100">
                       <td className="px-2 py-1 text-gray-400">{r.rowIndex}</td>
                       <td className="px-2 py-1 text-gray-800">{r.name || '-'}</td>
+                      <td className={`px-2 py-1 ${brandClass}`}>{brandLabel}</td>
                       <td className="px-2 py-1 text-center">
                         <span
                           className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${badge.color}`}

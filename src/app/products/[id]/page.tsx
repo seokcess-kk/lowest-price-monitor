@@ -27,7 +27,11 @@ export default async function ProductDetailPage({
   const startDate = getInitialStartDate();
 
   const [productRes, historyRes] = await Promise.all([
-    supabase.from('products').select('*').eq('id', id).maybeSingle(),
+    supabase
+      .from('products')
+      .select('*, brand:brands(id, name)')
+      .eq('id', id)
+      .maybeSingle(),
     supabase
       .from('price_logs')
       .select('*')
@@ -41,7 +45,8 @@ export default async function ProductDetailPage({
     notFound();
   }
 
-  const product = productRes.data as Product;
+  const raw = productRes.data as Product & { brand: { id: string; name: string } | null };
+  const product: Product = { ...raw, brand_name: raw.brand?.name ?? null };
   const initialHistory = (historyRes.data ?? []) as PriceLog[];
 
   return (

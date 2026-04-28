@@ -229,9 +229,16 @@ export default function ProductDetailClient({
           ← 대시보드로
         </Link>
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-keep">
-            {product.name}
-          </h1>
+          <div className="flex flex-col gap-1">
+            {product.brand_name && (
+              <span className="text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-0.5 self-start">
+                {product.brand_name}
+              </span>
+            )}
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-keep">
+              {product.name}
+            </h1>
+          </div>
           <Link
             href="/products/manage"
             className="min-h-9 inline-flex items-center px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"

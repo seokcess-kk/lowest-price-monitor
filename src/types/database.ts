@@ -1,11 +1,20 @@
 /** 수집 채널 */
 export type Channel = 'coupang' | 'naver' | 'danawa';
 
-/** products 테이블 */
+/** brands 테이블 */
+export interface Brand {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+/** products 테이블 — brand_name은 brand join 결과(API 응답에만 채워짐) */
 export interface Product {
   id: string;
   name: string;
   sabangnet_code: string | null;
+  brand_id: string | null;
+  brand_name?: string | null;
   coupang_url: string | null;
   naver_url: string | null;
   danawa_url: string | null;
@@ -45,15 +54,19 @@ export interface PriceWithChange {
   product_id: string;
   product_name: string;
   sabangnet_code: string | null;
+  brand_id: string | null;
+  brand_name: string | null;
   urls: ProductUrls;
   prices: ChannelPrice[];
   warnings?: FailureWarning[];
 }
 
-/** 상품 등록 입력 */
+/** 상품 등록 입력 — brand_name 우선(없으면 brand_id 그대로). 신규 브랜드는 서버에서 upsert */
 export interface CreateProductInput {
   name: string;
   sabangnet_code?: string | null;
+  brand_name?: string | null;
+  brand_id?: string | null;
   coupang_url?: string | null;
   naver_url?: string | null;
   danawa_url?: string | null;
@@ -63,6 +76,8 @@ export interface CreateProductInput {
 export interface UpdateProductInput {
   name?: string;
   sabangnet_code?: string | null;
+  brand_name?: string | null;
+  brand_id?: string | null;
   coupang_url?: string | null;
   naver_url?: string | null;
   danawa_url?: string | null;
@@ -100,4 +115,5 @@ export interface ExportFilter {
   start_date: string;
   end_date: string;
   product_ids?: string[];
+  brand_ids?: string[];
 }

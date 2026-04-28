@@ -7,6 +7,7 @@ import PriceCardList from '@/components/PriceCardList';
 import SummaryCards from '@/components/SummaryCards';
 import SearchInput from '@/components/SearchInput';
 import FilterChips, { type ChangeFilter } from '@/components/FilterChips';
+import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
 import { hasAnyChange, hasBigDrop, hasFailure } from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
@@ -62,6 +63,7 @@ export default function Home() {
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ChangeFilter>('all');
+  const [brandSelection, setBrandSelection] = useState<Set<string>>(new Set());
   const [view, setView] = useState<ViewMode>('card');
 
   const [collecting, setCollecting] = useState(false);
@@ -246,31 +248,53 @@ export default function Home() {
     [isActive, collectingIds, toast, refetch, refetchLastCollected]
   );
 
-  // 상품명 + 사방넷코드를 동시 검색하는 공통 매처
+  // 상품명 + 사방넷코드 + 브랜드명 동시 검색
   const matchSearch = (item: (typeof data)[number], q: string) => {
     if (!q) return true;
     const nameHit = item.product_name.toLowerCase().includes(q);
     const codeHit = (item.sabangnet_code ?? '').toLowerCase().includes(q);
-    return nameHit || codeHit;
+    const brandHit = (item.brand_name ?? '').toLowerCase().includes(q);
+    return nameHit || codeHit || brandHit;
   };
 
-  // 검색 + 필터 적용
+  const matchBrand = (item: (typeof data)[number]) => {
+    if (brandSelection.size === 0) return true;
+    if (item.brand_id) return brandSelection.has(item.brand_id);
+    return brandSelection.has(UNCATEGORIZED_BRAND_ID);
+  };
+
+  // 브랜드 필터용 카운트 (검색 적용 후 기준)
+  const brandCounts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const base = data.filter((item) => matchSearch(item, q));
+    const map: Record<string, number> = {};
+    let uncategorized = 0;
+    for (const item of base) {
+      if (item.brand_id) map[item.brand_id] = (map[item.brand_id] ?? 0) + 1;
+      else uncategorized++;
+    }
+    return { byId: map, uncategorized };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, search]);
+
+  // 검색 + 브랜드 + 필터 적용
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return data.filter((item) => {
       if (!matchSearch(item, q)) return false;
+      if (!matchBrand(item)) return false;
       if (filter === 'changed' && !hasAnyChange(item)) return false;
       if (filter === 'bigDrop' && !hasBigDrop(item)) return false;
       if (filter === 'failed' && !hasFailure(item)) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, search, filter]);
+  }, [data, search, filter, brandSelection]);
 
-  // 필터별 카운트 (검색 적용 후 기준)
+  // 필터 칩 카운트 (검색 + 브랜드 적용 후 기준)
   const counts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const base = data.filter((item) => matchSearch(item, q));
+    const base = data.filter((item) => matchSearch(item, q) && matchBrand(item));
     return {
       all: base.length,
       changed: base.filter(hasAnyChange).length,
@@ -278,7 +302,7 @@ export default function Home() {
       failed: base.filter(hasFailure).length,
     } as const;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, search]);
+  }, [data, search, brandSelection]);
 
   return (
     <div>
@@ -394,6 +418,12 @@ export default function Home() {
             <div className="flex flex-wrap items-center gap-3 flex-1 w-full">
               <SearchInput value={search} onChange={setSearch} />
               <FilterChips value={filter} onChange={setFilter} counts={counts} />
+              <BrandFilter
+                selected={brandSelection}
+                onChange={setBrandSelection}
+                counts={brandCounts.byId}
+                uncategorizedCount={brandCounts.uncategorized}
+              />
             </div>
             {/* 모바일에서는 카드 뷰만, 데스크톱에서는 토글 노출 */}
             <div className="hidden md:block">

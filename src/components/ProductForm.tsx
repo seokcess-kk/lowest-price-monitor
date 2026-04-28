@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { Product, CreateProductInput } from '@/types/database';
+import BrandCombobox from './BrandCombobox';
 
 interface ProductFormProps {
   initialData?: Product;
@@ -145,6 +146,7 @@ function normalizeUrl(channel: 'coupang' | 'naver' | 'danawa', raw: string): str
 export default function ProductForm({ initialData, onSubmit, onCancel }: ProductFormProps) {
   const [name, setName] = useState(initialData?.name || '');
   const [sabangnetCode, setSabangnetCode] = useState(initialData?.sabangnet_code || '');
+  const [brandName, setBrandName] = useState(initialData?.brand_name || '');
   const [coupangUrl, setCoupangUrl] = useState(initialData?.coupang_url || '');
   const [naverUrl, setNaverUrl] = useState(initialData?.naver_url || '');
   const [danawaUrl, setDanawaUrl] = useState(initialData?.danawa_url || '');
@@ -168,6 +170,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
       const payload: CreateProductInput = {
         name: name.trim(),
         sabangnet_code: sabangnetCode.trim() || null,
+        brand_name: brandName.trim() || null,
         coupang_url: normalizeUrl('coupang', coupangUrl) || null,
         naver_url: normalizeUrl('naver', naverUrl) || null,
         danawa_url: normalizeUrl('danawa', danawaUrl) || null,
@@ -264,6 +267,7 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
       if (!initialData) {
         setName('');
         setSabangnetCode('');
+        setBrandName('');
         setCoupangUrl('');
         setNaverUrl('');
         setDanawaUrl('');
@@ -285,6 +289,13 @@ export default function ProductForm({ initialData, onSubmit, onCancel }: Product
           placeholder="상품명을 입력하세요"
           required
         />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          브랜드
+          <span className="ml-1 text-xs text-gray-400 font-normal">(선택)</span>
+        </label>
+        <BrandCombobox value={brandName} onChange={setBrandName} />
       </div>
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
