@@ -105,6 +105,11 @@ export async function POST(
         status: 'completed',
         result_success: summary.success,
         result_failed: summary.failed,
+        // 부분 실패 시 errors도 함께 기록 — 안 그러면 UI에서 원인 못 봄
+        error_message:
+          summary.failed > 0 && summary.errors.length > 0
+            ? summary.errors.join('\n')
+            : null,
         completed_at: new Date().toISOString(),
         progress_done: 1,
       })
