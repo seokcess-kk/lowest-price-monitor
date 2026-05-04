@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
-import { collectAll } from '@/scraper';
 import { cleanupStaleRequests } from '@/lib/collect-cleanup';
 
-// Web Unlocker 1회 60초 + 재시도 + 3채널 직렬 가능성을 고려해 5분까지 확보.
-// 함수가 더 짧게 강제 종료되면 collect_requests row가 running으로 영구히 박힌다.
-export const maxDuration = 300;
+// dispatch만 하고 끝나므로 길게 잡을 필요 없음.
+export const maxDuration = 60;
 
 /**
- * 상품별 즉시 수집 (서버리스 인라인 실행).
+ * 상품별 즉시 수집 (GitHub Actions dispatch 방식).
+ *
+ * 이전에는 Vercel 함수 안에서 collectAll을 인라인 실행했지만, Hobby plan의 60초
+ * timeout 한도와 Web Unlocker 빈응답 재시도 시간(최대 ~3분)이 충돌해 함수가
+ * 강제 종료되며 collect_requests가 running으로 박히는 문제가 있었다.
  *
  * 정책:
  * - 전역 수집(product_id IS NULL)이 pending/running 이면 거절
  * - 동일 상품이 이미 pending/running 이면 거절
  * - 동일 상품 최근 60초 내 요청이 있으면 429
- * - 그 외에는 collect_requests 에 product_id row 생성 후 collectAll 인라인 실행
- * - 실행 결과에 따라 completed/failed 로 마크하고 동기 응답 반환
+ * - 그 외에는 collect_requests에 product_id row 생성 후 GitHub Actions를 dispatch.
+ *   request_id와 product_id를 inputs로 전달.
+ * - 실제 수집·상태 업데이트는 워크플로우 안의 collect.ts가 담당.
+ * - 응답은 즉시 반환되고 클라이언트는 collect_requests 폴링으로 결과 확인.
  */
 export async function POST(
   _req: NextRequest,
@@ -24,6 +28,18 @@ export async function POST(
   const { id: productId } = await context.params;
   if (!productId) {
     return NextResponse.json({ error: 'productId 누락' }, { status: 400 });
+  }
+
+  const token = process.env.GITHUB_TOKEN;
+  const repo = process.env.GITHUB_REPOSITORY;
+  const workflowFile = process.env.GITHUB_WORKFLOW_FILE || 'collect-prices.yml';
+  const ref = process.env.GITHUB_WORKFLOW_REF || 'main';
+
+  if (!token || !repo) {
+    return NextResponse.json(
+      { error: 'GITHUB_TOKEN / GITHUB_REPOSITORY 환경변수가 설정되지 않았습니다.' },
+      { status: 500 }
+    );
   }
 
   const supabase = createServiceClient();
@@ -74,13 +90,12 @@ export async function POST(
     );
   }
 
-  // 큐 row (running) 생성
+  // 큐 row 생성 (pending — workflow가 시작하면 running으로 전환)
   const { data: created, error: insertError } = await supabase
     .from('collect_requests')
     .insert({
-      status: 'running',
+      status: 'pending',
       product_id: productId,
-      started_at: new Date().toISOString(),
       progress_total: 1,
       progress_done: 0,
     })
@@ -93,46 +108,47 @@ export async function POST(
     );
   }
 
-  try {
-    const summary = await collectAll({
-      isManual: true,
-      productIds: [productId],
-    });
+  // GitHub Actions workflow_dispatch
+  const ghRes = await fetch(
+    `https://api.github.com/repos/${repo}/actions/workflows/${workflowFile}/dispatches`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ref,
+        inputs: {
+          request_id: String(created.id),
+          product_id: String(productId),
+        },
+      }),
+    }
+  );
 
-    await supabase
-      .from('collect_requests')
-      .update({
-        status: 'completed',
-        result_success: summary.success,
-        result_failed: summary.failed,
-        // 부분 실패 시 errors도 함께 기록 — 안 그러면 UI에서 원인 못 봄
-        error_message:
-          summary.failed > 0 && summary.errors.length > 0
-            ? summary.errors.join('\n')
-            : null,
-        completed_at: new Date().toISOString(),
-        progress_done: 1,
-      })
-      .eq('id', created.id);
-
-    return NextResponse.json({
-      message: '수집 완료',
-      requestId: created.id,
-      success: summary.success,
-      failed: summary.failed,
-      errors: summary.errors,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+  if (!ghRes.ok) {
+    const errorText = await ghRes.text().catch(() => '');
+    // 큐 row를 failed로 마크해서 폴링이 영원히 pending에 머물지 않게
     await supabase
       .from('collect_requests')
       .update({
         status: 'failed',
-        error_message: message,
+        error_message: `GitHub Actions 호출 실패: ${ghRes.status} ${errorText}`,
         completed_at: new Date().toISOString(),
       })
       .eq('id', created.id);
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: `GitHub Actions 호출 실패: ${ghRes.status} ${errorText}` },
+      { status: ghRes.status }
+    );
   }
+
+  return NextResponse.json({
+    message: '수집이 트리거되었습니다. 결과는 1~3분 후에 반영됩니다.',
+    requestId: created.id,
+  });
 }

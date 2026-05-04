@@ -243,6 +243,8 @@ export default function Home() {
         next.add(productId);
         return next;
       });
+
+      let requestId: string | null = null;
       try {
         const res = await fetch(`/api/collect/product/${productId}`, {
           method: 'POST',
@@ -250,31 +252,87 @@ export default function Home() {
         const body = await res.json();
         if (!res.ok) {
           toast.error(body.error || '수집 요청 실패');
+          setCollectingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(productId);
+            return next;
+          });
           return;
         }
-        const successCount = body.success ?? 0;
-        const failedCount = body.failed ?? 0;
-        if (successCount > 0 && failedCount === 0) {
-          toast.success(`수집 완료: ${successCount}건 성공`);
-        } else if (successCount > 0) {
-          toast.show(
-            `수집 완료: ${successCount}건 성공, ${failedCount}건 실패`,
-            'info'
-          );
-        } else {
-          toast.error(`수집 실패: 0건 성공, ${failedCount}건 실패`);
-        }
-        refetch();
-        refetchLastCollected();
+        requestId = body.requestId ?? null;
+        toast.show('수집이 트리거되었습니다. 결과는 곧 반영됩니다.', 'info');
       } catch (e) {
         toast.error(e instanceof Error ? e.message : '수집 요청 중 오류');
-      } finally {
         setCollectingIds((prev) => {
           const next = new Set(prev);
           next.delete(productId);
           return next;
         });
+        return;
       }
+
+      // GitHub Actions가 dispatch → 워크플로우 시작 → collect.ts 실행까지 보통 10~60초.
+      // collect_requests row 상태를 폴링해 completed/failed 시 toast + refetch.
+      // 5분 후에도 안 끝나면 자동 해제(stale cleanup이 처리할 것).
+      if (!requestId) {
+        setCollectingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+        return;
+      }
+
+      const reqId = requestId;
+      const startedAt = Date.now();
+      const POLL_INTERVAL_MS = 5_000;
+      const POLL_TIMEOUT_MS = 5 * 60_000;
+
+      const poll = async (): Promise<void> => {
+        if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+          toast.error('수집이 시간 안에 완료되지 않았습니다. 잠시 후 새로고침 해주세요.');
+          setCollectingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(productId);
+            return next;
+          });
+          return;
+        }
+        try {
+          const res = await fetch(`/api/collect/request/${reqId}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.status === 'completed') {
+              const s = data.result_success ?? 0;
+              const f = data.result_failed ?? 0;
+              if (s > 0 && f === 0) toast.success(`수집 완료: ${s}건 성공`);
+              else if (s > 0) toast.show(`수집 완료: ${s}건 성공, ${f}건 실패`, 'info');
+              else toast.error(data.error_message || `수집 실패`);
+              refetch();
+              refetchLastCollected();
+              setCollectingIds((prev) => {
+                const next = new Set(prev);
+                next.delete(productId);
+                return next;
+              });
+              return;
+            }
+            if (data.status === 'failed') {
+              toast.error(data.error_message || '수집 실패');
+              setCollectingIds((prev) => {
+                const next = new Set(prev);
+                next.delete(productId);
+                return next;
+              });
+              return;
+            }
+          }
+        } catch {
+          /* 다음 폴링 시도 */
+        }
+        setTimeout(poll, POLL_INTERVAL_MS);
+      };
+      setTimeout(poll, POLL_INTERVAL_MS);
     },
     [isActive, collectingIds, toast, refetch, refetchLastCollected]
   );

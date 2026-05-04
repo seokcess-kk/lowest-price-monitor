@@ -7,9 +7,12 @@ import { createServiceClient } from '../src/lib/supabase';
  * - 단순 실행: 모든 활성 상품에 대해 collectAll()을 호출하고 결과를 출력
  * - COLLECT_REQUEST_ID 환경변수가 있으면 collect_requests row 상태도 함께 업데이트
  *   (대시보드 "즉시 수집" 버튼에서 트리거된 워크플로우용)
+ * - COLLECT_PRODUCT_ID 환경변수가 있으면 그 상품 하나만 수집
+ *   (상품별 즉시 수집 버튼에서 트리거된 워크플로우용)
  */
 async function main(): Promise<void> {
   const requestId = process.env.COLLECT_REQUEST_ID || null;
+  const productId = process.env.COLLECT_PRODUCT_ID || null;
   const supabase = requestId ? createServiceClient() : null;
 
   if (supabase && requestId) {
@@ -19,11 +22,16 @@ async function main(): Promise<void> {
       .eq('id', requestId);
   }
 
-  console.log('가격 수집 시작...');
+  console.log(
+    productId
+      ? `가격 수집 시작 (단일 상품 ${productId})...`
+      : '가격 수집 시작...'
+  );
 
   try {
     const result = await collectAll({
       isManual: !!requestId,
+      productIds: productId ? [productId] : undefined,
       onProgress:
         supabase && requestId
           ? async (done, total) => {

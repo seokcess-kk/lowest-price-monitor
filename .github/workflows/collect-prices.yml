@@ -9,6 +9,10 @@ on:
         description: 'collect_requests row ID (대시보드 즉시 수집 버튼이 자동 전달)'
         required: false
         type: string
+      product_id:
+        description: '단일 상품 즉시 수집용 product UUID (지정 시 그 상품만 수집)'
+        required: false
+        type: string
 
 jobs:
   collect:
@@ -38,3 +42,4 @@ jobs:
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           COLLECT_REQUEST_ID: ${{ github.event.inputs.request_id }}
+          COLLECT_PRODUCT_ID: ${{ github.event.inputs.product_id }}
