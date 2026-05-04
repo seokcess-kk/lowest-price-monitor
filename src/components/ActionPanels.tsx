@@ -4,11 +4,17 @@ import Link from 'next/link';
 import { useMemo } from 'react';
 import type { PriceWithChange, Channel } from '@/types/database';
 import { cheapestChannel, productChangePercent, hasFailure } from '@/lib/price-utils';
+import type { ChangeFilter } from '@/components/FilterChips';
 
 interface Props {
   data: PriceWithChange[];
   /** 클릭 시 호출 (상품명으로 검색 적용 등). 미지정 시 단순 링크. */
   onProductClick?: (productId: string) => void;
+  /**
+   * 패널 헤더 '전체 보기' 클릭 시 호출.
+   * 메인 목록을 같은 조건으로 필터링하기 위해 HomeClient에서 setFilter로 연결.
+   */
+  onSelectFilter?: (filter: ChangeFilter) => void;
 }
 
 const CHANNEL_LABELS: Record<Channel, string> = {
@@ -29,7 +35,7 @@ const TOP_N = 5;
  * 운영자가 지금 무엇을 봐야 하는지 즉시 보이게 하는 액션 중심 4-패널.
  * KPI 요약과 상품 카드 사이에 들어간다. 모든 데이터는 latest 응답으로 충분.
  */
-export default function ActionPanels({ data, onProductClick }: Props) {
+export default function ActionPanels({ data, onProductClick, onSelectFilter }: Props) {
   const groups = useMemo(() => {
     const drops: Array<{ item: PriceWithChange; pct: number }> = [];
     const rises: Array<{ item: PriceWithChange; pct: number }> = [];
@@ -87,6 +93,8 @@ export default function ActionPanels({ data, onProductClick }: Props) {
         tone="down"
         totalCount={groups.counts.drops}
         emptyText="전일 대비 하락 없음"
+        filterKey="drops"
+        onSelectFilter={onSelectFilter}
       >
         {groups.drops.map(({ item, pct }) => (
           <PanelRow
@@ -104,6 +112,8 @@ export default function ActionPanels({ data, onProductClick }: Props) {
         tone="up"
         totalCount={groups.counts.rises}
         emptyText="전일 대비 상승 없음"
+        filterKey="rises"
+        onSelectFilter={onSelectFilter}
       >
         {groups.rises.map(({ item, pct }) => (
           <PanelRow
@@ -121,6 +131,8 @@ export default function ActionPanels({ data, onProductClick }: Props) {
         tone="warn"
         totalCount={groups.counts.failed}
         emptyText="실패 없음"
+        filterKey="failed"
+        onSelectFilter={onSelectFilter}
       >
         {groups.failed.map((item) => (
           <PanelRow
@@ -143,6 +155,8 @@ export default function ActionPanels({ data, onProductClick }: Props) {
         tone="muted"
         totalCount={groups.counts.missing}
         emptyText="모든 상품 정상 수집"
+        filterKey="missing"
+        onSelectFilter={onSelectFilter}
       >
         {groups.missing.map((item) => {
           const missingChannels: Channel[] = (['coupang', 'naver', 'danawa'] as Channel[]).filter(
@@ -173,9 +187,20 @@ interface PanelProps {
   totalCount: number;
   emptyText: string;
   children: React.ReactNode;
+  filterKey?: ChangeFilter;
+  onSelectFilter?: (filter: ChangeFilter) => void;
 }
 
-function Panel({ title, emoji, tone, totalCount, emptyText, children }: PanelProps) {
+function Panel({
+  title,
+  emoji,
+  tone,
+  totalCount,
+  emptyText,
+  children,
+  filterKey,
+  onSelectFilter,
+}: PanelProps) {
   const toneClass = {
     down: 'border-blue-200 bg-blue-50/40',
     up: 'border-red-200 bg-red-50/40',
@@ -188,19 +213,39 @@ function Panel({ title, emoji, tone, totalCount, emptyText, children }: PanelPro
     warn: 'text-orange-800',
     muted: 'text-gray-700',
   }[tone];
+  const linkColor = {
+    down: 'text-blue-700 hover:text-blue-900',
+    up: 'text-red-700 hover:text-red-900',
+    warn: 'text-orange-700 hover:text-orange-900',
+    muted: 'text-gray-700 hover:text-gray-900',
+  }[tone];
   const isEmpty =
     typeof children === 'object' &&
     children !== null &&
     Array.isArray(children) &&
     (children as React.ReactNode[]).length === 0;
+  const canFilter = !isEmpty && totalCount > 0 && filterKey && onSelectFilter;
   return (
     <div className={`rounded-lg border ${toneClass} p-3 flex flex-col`}>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className={`text-xs font-semibold ${titleColor} flex items-center gap-1.5`}>
-          <span aria-hidden>{emoji}</span> {title}
+      <div className="flex items-center justify-between mb-2 gap-2">
+        <h3 className={`text-xs font-semibold ${titleColor} flex items-center gap-1.5 min-w-0`}>
+          <span aria-hidden>{emoji}</span>
+          <span className="truncate">{title}</span>
+          {totalCount > TOP_N && (
+            <span className="text-[10px] text-gray-500 font-normal">
+              총 {totalCount}건
+            </span>
+          )}
         </h3>
-        {totalCount > TOP_N && (
-          <span className="text-[10px] text-gray-500">총 {totalCount}건</span>
+        {canFilter && (
+          <button
+            type="button"
+            onClick={() => onSelectFilter!(filterKey!)}
+            className={`shrink-0 text-[11px] font-medium ${linkColor} hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded`}
+            aria-label={`${title} ${totalCount}건 전체 필터로 보기`}
+          >
+            전체 보기 →
+          </button>
         )}
       </div>
       {isEmpty ? (

@@ -56,6 +56,26 @@ export function hasFailure(item: PriceWithChange): boolean {
   return !!item.warnings && item.warnings.length > 0;
 }
 
+/** URL이 하나도 없거나 모든 채널 가격이 0 — ActionPanels의 'URL 누락 / 미수집'과 동일 조건 */
+export function hasMissing(item: PriceWithChange): boolean {
+  const urlsAny =
+    !!item.urls.coupang || !!item.urls.naver || !!item.urls.danawa;
+  const noPrice = item.prices.every((p) => p.price <= 0);
+  return !urlsAny || noPrice;
+}
+
+/** 가격 하락 (1% 이상) — ActionPanels '가격 하락 Top'과 동일 조건 */
+export function hasDrop(item: PriceWithChange, thresholdPct = 1): boolean {
+  const pct = productChangePercent(item);
+  return pct !== null && pct <= -thresholdPct;
+}
+
+/** 가격 급등 (1% 이상) — ActionPanels '가격 급등 Top'과 동일 조건 */
+export function hasRise(item: PriceWithChange, thresholdPct = 1): boolean {
+  const pct = productChangePercent(item);
+  return pct !== null && pct >= thresholdPct;
+}
+
 /** 전체 KPI 집계 */
 export interface SummaryStats {
   totalProducts: number;

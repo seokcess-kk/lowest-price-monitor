@@ -17,14 +17,22 @@ import SearchInput from '@/components/SearchInput';
 import FilterChips, { type ChangeFilter } from '@/components/FilterChips';
 import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
-import { hasAnyChange, hasBigDrop, hasFailure } from '@/lib/price-utils';
+import {
+  hasAnyChange,
+  hasBigDrop,
+  hasFailure,
+  hasMissing,
+  hasDrop,
+  hasRise,
+} from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
 import { KpiCardSkeleton, ProductCardSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
 
 // useUrlState용 안정 codec 참조 — 모듈 레벨로 빼두면 useEffect deps가 흔들리지 않음
+// drops/rises/missing 은 ActionPanels 카드 클릭으로 진입하는 숨은 필터 — codec에는 포함해 URL 양방향 동기화
 const FILTER_CODEC = enumCodec<ChangeFilter>(
-  ['all', 'changed', 'bigDrop', 'failed'],
+  ['all', 'changed', 'bigDrop', 'failed', 'drops', 'rises', 'missing'],
   'all'
 );
 const VIEW_CODEC = enumCodec<ViewMode>(['card', 'table'], 'card');
@@ -314,6 +322,9 @@ export default function Home() {
       if (filter === 'changed' && !hasAnyChange(item)) return false;
       if (filter === 'bigDrop' && !hasBigDrop(item)) return false;
       if (filter === 'failed' && !hasFailure(item)) return false;
+      if (filter === 'drops' && !hasDrop(item)) return false;
+      if (filter === 'rises' && !hasRise(item)) return false;
+      if (filter === 'missing' && !hasMissing(item)) return false;
       return true;
     });
   }, [data, search, filter, matchSearch, matchBrand]);
@@ -349,6 +360,9 @@ export default function Home() {
         changed: '가격 변동',
         bigDrop: '5% 이상 하락',
         failed: '수집 실패',
+        drops: '가격 하락',
+        rises: '가격 급등',
+        missing: 'URL 누락 / 미수집',
       };
       items.push({
         label: labels[filter],
@@ -510,6 +524,17 @@ export default function Home() {
             onProductClick={(productId) => {
               const item = data.find((d) => d.product_id === productId);
               if (item) setSearch(item.product_name);
+            }}
+            onSelectFilter={(next) => {
+              setFilter(next);
+              // 필터로 진입하면 검색어는 충돌하므로 비우고, 사용자가 결과를 바로 보도록 스크롤
+              setSearch('');
+              if (typeof window !== 'undefined') {
+                window.scrollTo({
+                  top: window.innerHeight * 0.5,
+                  behavior: 'smooth',
+                });
+              }
             }}
           />
 

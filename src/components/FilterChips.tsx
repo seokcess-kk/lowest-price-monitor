@@ -1,6 +1,15 @@
 'use client';
 
-export type ChangeFilter = 'all' | 'changed' | 'bigDrop' | 'failed';
+// 'drops' / 'rises' / 'missing' 은 ActionPanels 카드 클릭으로만 진입하는 숨은 필터.
+// FilterChips UI에는 표시하지 않지만 같은 type을 공유해 ActiveFilterChips·필터 로직에서 일관 처리.
+export type ChangeFilter =
+  | 'all'
+  | 'changed'
+  | 'bigDrop'
+  | 'failed'
+  | 'drops'
+  | 'rises'
+  | 'missing';
 
 interface FilterChipsProps {
   value: ChangeFilter;
