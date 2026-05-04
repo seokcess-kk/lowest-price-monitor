@@ -12,16 +12,21 @@ export interface ScrapeResult {
  * 이전에는 쿠팡 파트너스 API를 썼으나, 파트너스 API 가격이 웹사이트 실제 판매가와
  * 달라(와우·쿠폰 할인 미반영) 정확도 문제가 있어 Web Unlocker 방식으로 전환.
  *
- * Web Unlocker가 가끔 200 OK + 0바이트로 응답하는 경우가 있어 (실 측정 ~50% 비율)
- * non-OK / 차단 / 빈 응답이면 1회 재시도한다.
+ * Web Unlocker가 가끔 200 OK + 0바이트로 응답하는 경우가 있어 (실 측정 ~50% 비율).
+ * 두 번 연속 발생도 자주 관측되므로 최대 3회 시도 + 재시도 사이 1.5초 백오프
+ * (Bright Data 측에서 다른 우회 경로를 시도할 시간을 확보).
  */
-const MAX_FETCH_ATTEMPTS = 2;
+const MAX_FETCH_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = 1_500;
 const MIN_HTML_BYTES = 5_000;
 
 export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
   let html = '';
 
   for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    }
     const res = await callWebUnlocker({ channel: 'coupang', url });
     if (!res.ok) {
       console.warn(`[coupang] Web Unlocker ${res.status} (attempt ${attempt})`);
@@ -43,7 +48,9 @@ export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
   }
 
   if (!html) {
-    console.warn('[coupang] 모든 시도에서 유효 HTML 확보 실패');
+    console.warn(
+      `[coupang] ${MAX_FETCH_ATTEMPTS}회 시도 모두 유효 HTML 확보 실패`
+    );
     return null;
   }
 
