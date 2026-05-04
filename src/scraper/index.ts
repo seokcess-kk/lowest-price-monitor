@@ -1,5 +1,6 @@
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
+import { cleanupStaleRequests } from '@/lib/collect-cleanup';
 import { delay } from './utils';
 import { flushUsage } from './brightdata';
 import { scrapeCoupang } from './channels/coupang';
@@ -131,6 +132,12 @@ export async function collectAll(
   // 개별/전역 동시 수집 시 중복 price_logs 방지
   let filteredProducts = products as Product[];
   if (!productIds) {
+    // 함수 타임아웃으로 영구히 running 박힌 row가 있으면 그 상품을 잘못 제외하게 됨 → 먼저 정리
+    try {
+      await cleanupStaleRequests();
+    } catch (e) {
+      console.warn('[collectAll] stale cleanup 실패:', e);
+    }
     try {
       const { data: runningProductReqs } = await supabase
         .from('collect_requests')

@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 
+// 전역 수집은 GitHub Actions로 dispatch만 하므로 길게 잡을 필요는 없지만,
+// dispatch 호출이 느린 경우 대비해 명시적으로 60초까지 확보.
+export const maxDuration = 60;
+
 /**
  * 즉시 수집 요청.
  *

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 import { collectAll } from '@/scraper';
+import { cleanupStaleRequests } from '@/lib/collect-cleanup';
+
+// Web Unlocker 1회 60초 + 재시도 + 3채널 직렬 가능성을 고려해 5분까지 확보.
+// 함수가 더 짧게 강제 종료되면 collect_requests row가 running으로 영구히 박힌다.
+export const maxDuration = 300;
 
 /**
  * 상품별 즉시 수집 (서버리스 인라인 실행).
@@ -22,6 +27,9 @@ export async function POST(
   }
 
   const supabase = createServiceClient();
+
+  // 함수 타임아웃 등으로 영구히 running에 박힌 row가 있으면 충돌체크에 막히므로 먼저 정리
+  await cleanupStaleRequests();
 
   // 전역 수집 중 차단
   const { data: globalActive } = await supabase

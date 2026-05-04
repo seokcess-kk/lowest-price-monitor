@@ -11,20 +11,39 @@ export interface ScrapeResult {
  *
  * 이전에는 쿠팡 파트너스 API를 썼으나, 파트너스 API 가격이 웹사이트 실제 판매가와
  * 달라(와우·쿠폰 할인 미반영) 정확도 문제가 있어 Web Unlocker 방식으로 전환.
+ *
+ * Web Unlocker가 가끔 200 OK + 0바이트로 응답하는 경우가 있어 (실 측정 ~50% 비율)
+ * non-OK / 차단 / 빈 응답이면 1회 재시도한다.
  */
-export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
-  const res = await callWebUnlocker({ channel: 'coupang', url });
+const MAX_FETCH_ATTEMPTS = 2;
+const MIN_HTML_BYTES = 5_000;
 
-  if (!res.ok) {
-    console.warn(`[coupang] Web Unlocker ${res.status}`);
-    return null;
+export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
+  let html = '';
+
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    const res = await callWebUnlocker({ channel: 'coupang', url });
+    if (!res.ok) {
+      console.warn(`[coupang] Web Unlocker ${res.status} (attempt ${attempt})`);
+      continue;
+    }
+    const body = res.text ?? '';
+    if (body.includes('차단된 접근입니다')) {
+      console.warn(`[coupang] 차단 페이지 (attempt ${attempt})`);
+      continue;
+    }
+    if (body.length < MIN_HTML_BYTES) {
+      console.warn(
+        `[coupang] 빈/짧은 응답 ${body.length}B (attempt ${attempt})`
+      );
+      continue;
+    }
+    html = body;
+    break;
   }
 
-  const html = res.text ?? '';
-
-  // 차단 페이지 방어
-  if (html.includes('차단된 접근입니다') || html.length < 5_000) {
-    console.warn('[coupang] 차단/빈 응답 감지');
+  if (!html) {
+    console.warn('[coupang] 모든 시도에서 유효 HTML 확보 실패');
     return null;
   }
 
