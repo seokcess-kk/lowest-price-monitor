@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { useProducts } from '@/hooks/useProducts';
 import {
@@ -51,6 +53,8 @@ const CHANNELS: Channel[] = ['coupang', 'naver', 'danawa'];
 
 export default function ManageProductsPage() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+  const focusId = searchParams.get('id');
   const { products, loading, error, refetch } = useProducts(false);
 
   const [search, setSearch] = useUrlState('q', '', stringCodec);
@@ -83,8 +87,21 @@ export default function ManageProductsPage() {
   const urlCount = (p: Product) =>
     (p.coupang_url ? 1 : 0) + (p.naver_url ? 1 : 0) + (p.danawa_url ? 1 : 0);
 
-  // 검색 + 필터 + 정렬
+  // 상품 상세 → '상품 관리' 진입 시 해당 상품만 보여주는 포커스 모드
+  const focusedProduct = useMemo(
+    () => (focusId ? products.find((p) => p.id === focusId) ?? null : null),
+    [products, focusId]
+  );
+
+  useEffect(() => {
+    if (focusId) setExpanded((prev) => new Set([...prev, focusId]));
+  }, [focusId]);
+
+  // 검색 + 필터 + 정렬 (focusId가 있으면 그 상품만)
   const filtered = useMemo(() => {
+    if (focusId) {
+      return focusedProduct ? [focusedProduct] : [];
+    }
     const q = search.trim().toLowerCase();
     const list = products.filter((p) => {
       if (q) {
@@ -425,7 +442,26 @@ export default function ManageProductsPage() {
         </div>
       </div>
 
-      {/* 검색 + 필터 + 카운트 */}
+      {/* 포커스 모드: 상품 상세에서 '상품 관리'로 진입한 단일 상품 컨텍스트 */}
+      {focusId && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm">
+          <span className="text-blue-800 truncate">
+            <span className="font-semibold">
+              {focusedProduct?.name ?? '선택한 상품'}
+            </span>
+            <span className="ml-1 text-blue-600">관리 모드</span>
+          </span>
+          <Link
+            href="/products/manage"
+            className="shrink-0 px-2.5 py-1 text-xs border border-blue-300 bg-white text-blue-700 rounded hover:bg-blue-100"
+          >
+            전체 상품 보기
+          </Link>
+        </div>
+      )}
+
+      {/* 검색 + 필터 + 카운트 (포커스 모드에서는 의미 없으므로 숨김) */}
+      {!focusId && (
       <div className="bg-white rounded-lg border border-gray-200 p-3 mb-4 flex flex-wrap items-center gap-3">
         <SearchInput value={search} onChange={setSearch} />
         <div className="flex gap-2">
@@ -480,13 +516,16 @@ export default function ManageProductsPage() {
           />
         </div>
       </div>
+      )}
 
-      <ActiveFilterChips
-        items={activeChips}
-        onClearAll={activeChips.length > 0 ? clearAllFilters : undefined}
-        matchedCount={filtered.length}
-        totalCount={products.length}
-      />
+      {!focusId && (
+        <ActiveFilterChips
+          items={activeChips}
+          onClearAll={activeChips.length > 0 ? clearAllFilters : undefined}
+          matchedCount={filtered.length}
+          totalCount={products.length}
+        />
+      )}
 
       {/* 일괄 작업 바 — 데스크톱: 인라인, 모바일: sticky bottom */}
       {selected.size > 0 && (

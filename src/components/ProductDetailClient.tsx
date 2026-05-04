@@ -308,7 +308,7 @@ export default function ProductDetailClient({
             </h1>
           </div>
           <Link
-            href="/products/manage"
+            href={`/products/manage?id=${productId}`}
             className="min-h-9 inline-flex items-center px-3 py-1.5 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-50"
           >
             ✏ 상품 관리
