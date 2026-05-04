@@ -87,11 +87,13 @@ async function buildLatest(
   const todayStr = dateKeyKST();
   const yesterdayStr = daysAgoKeyKST(1);
 
+  // is_suspicious=true 로그도 함께 조회 — 의심 마킹된 가격이라도 "수집은 됐다"는 사실을
+  // 메인 화면에 반영해야 ActionPanels의 missing 분류와 인라인 가격 표시가 정확해진다.
+  // ChannelPrice.is_suspicious 플래그로 UI에서 시각 구분.
   const { data: logs, error: logError } = await supabase
     .from('price_logs')
     .select('*')
     .in('product_id', productIds)
-    .eq('is_suspicious', false)
     .gte('collected_at', startOfDayKstISO(yesterdayStr))
     .lte('collected_at', endOfDayKstISO(todayStr))
     .order('collected_at', { ascending: false });
@@ -161,25 +163,28 @@ async function buildLatest(
     const prices: ChannelPrice[] = channels.map((channel) => {
       const channelLogs = logIndex.get(`${product.id}:${channel}`) ?? [];
 
-      let todayLog: LogRow | undefined;
-      let yesterdayLog: LogRow | undefined;
-      for (const l of channelLogs) {
-        const key = dateKeyKST(l.collected_at);
-        if (!todayLog && key === todayStr) todayLog = l;
-        else if (!yesterdayLog && key === yesterdayStr) yesterdayLog = l;
-        if (todayLog && yesterdayLog) break;
-      }
+      // is_suspicious=false 가 있으면 그것을 우선, 없으면 의심 가격이라도 사용
+      const normal = channelLogs.filter((l) => !l.is_suspicious);
+      const findFor = (arr: LogRow[], dayKey: string): LogRow | undefined =>
+        arr.find((l) => dateKeyKST(l.collected_at) === dayKey);
+
+      const todayLog =
+        findFor(normal, todayStr) ?? findFor(channelLogs, todayStr);
+      const yesterdayLog =
+        findFor(normal, yesterdayStr) ?? findFor(channelLogs, yesterdayStr);
 
       let change: number | null = null;
       if (todayLog && yesterdayLog) {
         change = todayLog.price - yesterdayLog.price;
       }
 
+      const sourceLog = todayLog ?? yesterdayLog;
       return {
         channel,
-        price: todayLog?.price ?? yesterdayLog?.price ?? 0,
-        store_name: todayLog?.store_name ?? yesterdayLog?.store_name ?? null,
+        price: sourceLog?.price ?? 0,
+        store_name: sourceLog?.store_name ?? null,
         change,
+        is_suspicious: sourceLog?.is_suspicious === true ? true : undefined,
       };
     });
 

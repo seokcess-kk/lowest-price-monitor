@@ -40,6 +40,8 @@ export interface ChannelPrice {
   price: number;
   store_name: string | null;
   change: number | null;
+  /** 가격 이상치로 마킹된 로그를 사용한 경우. UI에서 시각적으로 구분. */
+  is_suspicious?: boolean;
 }
 
 /** 채널별 URL 맵 */
