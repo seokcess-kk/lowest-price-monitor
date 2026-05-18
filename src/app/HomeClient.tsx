@@ -435,15 +435,6 @@ export default function Home() {
             {collecting ? '요청 중...' : isActive ? '수집 중...' : '즉시 수집'}
           </button>
           <button
-            onClick={() => {
-              stopPolling();
-              refetch();
-            }}
-            className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm"
-          >
-            새로고침
-          </button>
-          <button
             onClick={async () => {
               if (filtered.length === 0) {
                 toast.show('내보낼 상품이 없습니다.', 'info');
