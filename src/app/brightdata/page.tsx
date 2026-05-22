@@ -40,6 +40,13 @@ interface SyncResponse {
   drift: number | null;
 }
 
+interface BalanceResponse {
+  balance: number | null;
+  pendingBalance: number | null;
+  currency: string;
+  fetchedAt: string;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -65,6 +72,9 @@ export default function BrightDataPage() {
   const toast = useToast();
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [sync, setSync] = useState<SyncResponse | null>(null);
+  const [balance, setBalance] = useState<BalanceResponse | null>(null);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +91,24 @@ export default function BrightDataPage() {
     const projectedBytes = Math.round((usage.month.bytes / currentDay) * daysInMonth);
     return { total: projectedTotal, bytes: projectedBytes, daysInMonth, currentDay, cost: calcCost(projectedTotal) };
   }, [usage]);
+
+  const loadBalance = async () => {
+    setBalanceLoading(true);
+    setBalanceError(null);
+    try {
+      const res = await fetch('/api/brightdata/balance', { cache: 'no-store' });
+      const body = await res.json();
+      if (!res.ok) {
+        setBalanceError(body.error ?? `잔액 조회 실패 (${res.status})`);
+        return;
+      }
+      setBalance(body);
+    } catch (err) {
+      setBalanceError(err instanceof Error ? err.message : '잔액 조회 실패');
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -102,6 +130,7 @@ export default function BrightDataPage() {
 
   useEffect(() => {
     load();
+    loadBalance();
   }, []);
 
   const runSync = async () => {
@@ -146,6 +175,59 @@ export default function BrightDataPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Bright Data 사용량</h1>
+
+      {/* 계정 잔액 */}
+      <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="text-sm text-gray-500 mb-2">계정 잔액 (USD)</div>
+            {balanceError ? (
+              <div className="text-sm text-red-600">{balanceError}</div>
+            ) : balance === null ? (
+              <div className="text-sm text-gray-500">조회 중...</div>
+            ) : (
+              <div className="flex items-baseline gap-6 flex-wrap">
+                <div>
+                  <div className="text-3xl font-bold text-gray-900">
+                    {balance.balance !== null ? formatUsd(balance.balance) : '—'}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">사용 가능</div>
+                </div>
+                <div>
+                  <div className="text-xl font-semibold text-gray-700">
+                    {balance.pendingBalance !== null ? formatUsd(balance.pendingBalance) : '—'}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">보류 (pending)</div>
+                </div>
+                {projected && balance.balance !== null && projected.cost > 0 && (
+                  <div>
+                    <div
+                      className={`text-xl font-semibold ${
+                        balance.balance < projected.cost ? 'text-red-600' : 'text-gray-700'
+                      }`}
+                    >
+                      {(balance.balance / projected.cost).toFixed(1)}개월
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      현재 페이스 기준 (월 {formatUsd(projected.cost)})
+                    </div>
+                  </div>
+                )}
+                <div className="text-xs text-gray-400 self-end">
+                  {balance.fetchedAt.slice(0, 19).replace('T', ' ')} 조회
+                </div>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={loadBalance}
+            disabled={balanceLoading}
+            className="px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50"
+          >
+            {balanceLoading ? '조회 중...' : '새로고침'}
+          </button>
+        </div>
+      </div>
 
       {/* 오늘/이번 달/예상 KPI */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
