@@ -605,15 +605,13 @@ export default function Home() {
                 type="button"
                 onClick={handleCollectFiltered}
                 disabled={collecting || isActive}
+                title="현재 필터에 보이는 상품만 GitHub Actions로 일괄 수집"
                 className="inline-flex items-center gap-1.5 min-h-9 px-3 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 text-sm font-medium"
               >
                 {isActive
                   ? '수집 중...'
                   : `필터된 ${filtered.length}개 수집`}
               </button>
-              <span className="text-xs text-gray-500">
-                현재 필터에 보이는 상품만 일괄 수집합니다 (GitHub Actions).
-              </span>
             </div>
           )}
 
