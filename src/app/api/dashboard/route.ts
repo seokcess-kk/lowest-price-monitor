@@ -5,6 +5,7 @@ import type {
   PriceWithChange,
   ChannelPrice,
   FailureWarning,
+  PriceLog,
 } from '@/types/database';
 import {
   dateKeyKST,
@@ -12,6 +13,7 @@ import {
   startOfDayKstISO,
   endOfDayKstISO,
 } from '@/lib/date-utils';
+import { selectByIdChunks } from '@/lib/query-chunk';
 
 export interface DashboardResponse {
   latest: PriceWithChange[];
@@ -90,19 +92,21 @@ async function buildLatest(
   // is_suspicious=true 로그도 함께 조회 — 의심 마킹된 가격이라도 "수집은 됐다"는 사실을
   // 메인 화면에 반영해야 ActionPanels의 missing 분류와 인라인 가격 표시가 정확해진다.
   // ChannelPrice.is_suspicious 플래그로 UI에서 시각 구분.
-  const { data: logs, error: logError } = await supabase
-    .from('price_logs')
-    .select('*')
-    .in('product_id', productIds)
-    .gte('collected_at', startOfDayKstISO(yesterdayStr))
-    .lte('collected_at', endOfDayKstISO(todayStr))
-    .order('collected_at', { ascending: false });
-
-  if (logError) throw new Error(logError.message);
+  // 활성 상품이 많으면 .in(전체 productIds)가 URL 길이 한도를 넘어 400이 나므로 청크 분할 조회.
+  const logs = await selectByIdChunks<PriceLog>(productIds, (ids, from, to) =>
+    supabase
+      .from('price_logs')
+      .select('*')
+      .in('product_id', ids)
+      .gte('collected_at', startOfDayKstISO(yesterdayStr))
+      .lte('collected_at', endOfDayKstISO(todayStr))
+      .order('collected_at', { ascending: false })
+      .range(from, to)
+  );
 
   const channels: Channel[] = ['coupang', 'naver', 'danawa'];
 
-  type LogRow = NonNullable<typeof logs>[number];
+  type LogRow = PriceLog;
   const logIndex = new Map<string, LogRow[]>();
   for (const log of logs ?? []) {
     const key = `${log.product_id}:${log.channel}`;
@@ -124,14 +128,15 @@ async function buildLatest(
   if (!rpcErr && Array.isArray(rpcRows)) {
     recentErrors = rpcRows as ErrorRow[];
   } else {
-    const { data: fallback } = await supabase
-      .from('scrape_errors')
-      .select('product_id, channel, created_at')
-      .in('product_id', productIds)
-      .gte('created_at', sevenDaysAgo)
-      .order('created_at', { ascending: false })
-      .limit(2000);
-    recentErrors = (fallback ?? []) as ErrorRow[];
+    recentErrors = await selectByIdChunks<ErrorRow>(productIds, (ids, from, to) =>
+      supabase
+        .from('scrape_errors')
+        .select('product_id, channel, created_at')
+        .in('product_id', ids)
+        .gte('created_at', sevenDaysAgo)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+    );
   }
 
   const failureMap = new Map<string, number>();
@@ -225,14 +230,19 @@ async function buildSparklines(
 ): Promise<Record<string, number[]>> {
   const sinceKey = daysAgoKeyKST(days - 1);
 
-  const { data: logs, error: logError } = await supabase
-    .from('price_logs')
-    .select('product_id, price, collected_at')
-    .in('product_id', productIds)
-    .eq('is_suspicious', false)
-    .gte('collected_at', startOfDayKstISO(sinceKey));
-
-  if (logError) throw new Error(logError.message);
+  const logs = await selectByIdChunks<{
+    product_id: string;
+    price: number;
+    collected_at: string;
+  }>(productIds, (ids, from, to) =>
+    supabase
+      .from('price_logs')
+      .select('product_id, price, collected_at')
+      .in('product_id', ids)
+      .eq('is_suspicious', false)
+      .gte('collected_at', startOfDayKstISO(sinceKey))
+      .range(from, to)
+  );
 
   const dayKeys: string[] = [];
   for (let i = days - 1; i >= 0; i--) {

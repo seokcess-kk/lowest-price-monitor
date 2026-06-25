@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase';
 import { cleanupStaleRequests } from '@/lib/collect-cleanup';
 import { delay } from './utils';
 import { flushUsage } from './brightdata';
+import { selectByIdChunks } from '@/lib/query-chunk';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
 import { scrapeDanawa } from './channels/danawa';
@@ -197,16 +198,23 @@ export async function collectAll(
   const baselineMap = new Map<string, number>(); // key: "productId:channel" → dominantPrice
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: recentLogs } = await supabase
-      .from('price_logs')
-      .select('product_id, channel, price')
-      .in('product_id', baselineProductIds)
-      .eq('is_suspicious', false)
-      .gte('collected_at', sevenDaysAgo)
-      .order('collected_at', { ascending: false })
-      .limit(10000);
+    // 활성 상품이 많으면 .in(전체)가 URL 길이 한도를 넘어 baseline 조회가 통째로 실패한다 → 청크 분할.
+    const recentLogs = await selectByIdChunks<{
+      product_id: string;
+      channel: Channel;
+      price: number;
+    }>(baselineProductIds, (ids, from, to) =>
+      supabase
+        .from('price_logs')
+        .select('product_id, channel, price')
+        .in('product_id', ids)
+        .eq('is_suspicious', false)
+        .gte('collected_at', sevenDaysAgo)
+        .order('collected_at', { ascending: false })
+        .range(from, to)
+    );
     const grouped = new Map<string, number[]>();
-    for (const log of recentLogs ?? []) {
+    for (const log of recentLogs) {
       const key = `${log.product_id}:${log.channel}`;
       const arr = grouped.get(key);
       if (arr) arr.push(log.price as number);

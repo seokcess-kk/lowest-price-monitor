@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 import type { Channel } from '@/types/database';
+import { selectByIdChunks } from '@/lib/query-chunk';
 
 export interface ErrorGroupRow {
   product_id: string;
@@ -128,14 +129,17 @@ export async function GET(request: NextRequest) {
 
     // 그룹 단위로 마지막 성공 시각 조회 — (product_id, channel) 쌍을 OR 결합
     const productIds = Array.from(new Set([...groups.values()].map((g) => g.product_id)));
-    const { data: successes } = await supabase
-      .from('price_logs')
-      .select('product_id, channel, collected_at')
-      .in('product_id', productIds)
-      .order('collected_at', { ascending: false });
+    const successes = await selectByIdChunks<RawSuccessRow>(productIds, (ids, from, to) =>
+      supabase
+        .from('price_logs')
+        .select('product_id, channel, collected_at')
+        .in('product_id', ids)
+        .order('collected_at', { ascending: false })
+        .range(from, to)
+    );
 
     const lastSuccess = new Map<string, string>();
-    for (const row of successes ?? []) {
+    for (const row of successes) {
       const r = row as unknown as RawSuccessRow;
       const key = `${r.product_id}:${r.channel}`;
       if (!lastSuccess.has(key)) lastSuccess.set(key, r.collected_at);
