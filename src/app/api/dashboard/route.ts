@@ -164,6 +164,37 @@ async function buildLatest(
     }
   }
 
+  // 실패한 (product, channel)에 한해 최신 실패 사유/시각을 보충한다.
+  // RPC/fallback은 error_message를 주지 않으므로, 실패 셋에 대해서만 scrape_errors를 한 번 더 조회.
+  const messageMap = new Map<string, { message: string; at: string }>();
+  if (failureMap.size > 0) {
+    const failingProductIds = Array.from(
+      new Set(Array.from(failureMap.keys()).map((k) => k.split(':')[0]))
+    );
+    type MsgRow = {
+      product_id: string;
+      channel: string;
+      error_message: string;
+      created_at: string;
+    };
+    const msgRows = await selectByIdChunks<MsgRow>(failingProductIds, (ids, from, to) =>
+      supabase
+        .from('scrape_errors')
+        .select('product_id, channel, error_message, created_at')
+        .in('product_id', ids)
+        .gte('created_at', sevenDaysAgo)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+    );
+    for (const r of msgRows) {
+      const key = `${r.product_id}:${r.channel}`;
+      // order desc 이므로 키별 첫 등장 = 최신
+      if (!messageMap.has(key)) {
+        messageMap.set(key, { message: r.error_message, at: r.created_at });
+      }
+    }
+  }
+
   return products.map((product) => {
     const prices: ChannelPrice[] = channels.map((channel) => {
       const channelLogs = logIndex.get(`${product.id}:${channel}`) ?? [];
@@ -198,10 +229,13 @@ async function buildLatest(
       const key = `${product.id}:${channel}`;
       const count = failureMap.get(key);
       if (count && count >= 3) {
+        const msg = messageMap.get(key);
         warnings.push({
           product_id: product.id,
           channel,
           consecutive_failures: count,
+          last_failure_message: msg?.message ?? '',
+          last_failure_at: msg?.at ?? '',
         });
       }
     }

@@ -75,7 +75,15 @@ export default function PriceCardList({
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 {failureCount > 0 && (
-                  <span className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5">
+                  <span
+                    className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"
+                    title={item
+                      .warnings!.map(
+                        (w) =>
+                          `${CHANNEL_LABELS[w.channel]}: ${w.last_failure_message || '수집 실패'}`
+                      )
+                      .join('\n')}
+                  >
                     ⚠ {failureCount}
                   </span>
                 )}

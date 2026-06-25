@@ -110,6 +110,10 @@ export interface FailureWarning {
   product_id: string;
   channel: Channel;
   consecutive_failures: number;
+  /** 가장 최근 실패 사유 (scrape_errors.error_message). 없으면 빈 문자열 */
+  last_failure_message: string;
+  /** 가장 최근 실패 시각 (ISO). 없으면 빈 문자열 */
+  last_failure_at: string;
 }
 
 /** Export 필터 */

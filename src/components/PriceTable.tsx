@@ -265,7 +265,12 @@ function RowGroup({
               {hasFailures && (
                 <span
                   className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5"
-                  title={`${item.warnings!.length}개 채널 수집 실패`}
+                  title={item
+                    .warnings!.map(
+                      (w) =>
+                        `${CHANNEL_LABELS[w.channel]}: ${w.last_failure_message || '수집 실패'}`
+                    )
+                    .join('\n')}
                 >
                   ⚠ {item.warnings!.length}
                 </span>
@@ -368,7 +373,23 @@ function ChannelDetailGrid({
             </div>
             {warning && (
               <div className="text-xs text-red-600 bg-red-50 rounded px-2 py-1 mb-2">
-                연속 {warning.consecutive_failures}회 수집 실패
+                <div>연속 {warning.consecutive_failures}회 수집 실패</div>
+                {warning.last_failure_message && (
+                  <div className="mt-0.5 text-[11px] text-red-700 break-words">
+                    {warning.last_failure_message}
+                    {warning.last_failure_at && (
+                      <span className="text-red-400">
+                        {' · '}
+                        {new Date(warning.last_failure_at).toLocaleString('ko-KR', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {channelPrice && channelPrice.price > 0 ? (

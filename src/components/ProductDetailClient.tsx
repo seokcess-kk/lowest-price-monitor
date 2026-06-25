@@ -13,6 +13,7 @@ interface ChannelErrorSummary {
   consecutive_failures: number;
   last_failure_at: string;
   last_success_at: string | null;
+  last_failure_message?: string;
 }
 
 function formatRelativeShort(iso: string | null): string {
@@ -400,6 +401,11 @@ export default function ProductDetailClient({
                           <div className="text-red-600 font-medium">
                             ⚠ {errInfo.consecutive_failures}회 실패 ·{' '}
                             {formatRelativeShort(errInfo.last_failure_at)}
+                            {errInfo.last_failure_message && (
+                              <span className="block font-normal text-red-700 break-words">
+                                {errInfo.last_failure_message}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>

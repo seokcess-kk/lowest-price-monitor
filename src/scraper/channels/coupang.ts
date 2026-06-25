@@ -87,7 +87,25 @@ export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
 
   // 2순위: 렌더된 DOM의 최종 가격 요소
   console.warn('[coupang] JSON-LD 파싱 실패 — DOM 폴백 시도');
-  return parseFromDom(html);
+  const domResult = parseFromDom(html);
+  if (domResult) return domResult;
+
+  // 가격을 못 찾은 경우, 품절이면 구체 사유로 throw 한다 (상위 collectAll이 error_message로 기록).
+  // 품절 페이지는 JSON-LD Product도 final-price 요소도 없어 여기까지 떨어진다.
+  if (isSoldOut(html)) {
+    throw new Error('쿠팡 품절');
+  }
+
+  return null;
+}
+
+/**
+ * 쿠팡 품절 여부. 구매 버튼이 "품절"/"일시품절"/"판매 종료"를 렌더하는 경우만 인정한다.
+ * 페이지 i18n 사전(`...":"일시품절"`)에 해당 문자열이 항상 포함돼 전역 검색은 오탐이므로,
+ * 구매 버튼 클래스(find-known__buy__button)에 앵커링한다. (클래스 해시 접미사는 없음)
+ */
+function isSoldOut(html: string): boolean {
+  return /find-known__buy__button[^>]*>\s*(?:일시품절|품절|판매\s*종료)/.test(html);
 }
 
 /**

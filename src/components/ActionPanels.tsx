@@ -140,7 +140,15 @@ export default function ActionPanels({ data, onProductClick, onSelectFilter }: P
             item={item}
             onProductClick={onProductClick}
             right={
-              <span className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 whitespace-nowrap">
+              <span
+                className="text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 whitespace-nowrap"
+                title={(item.warnings ?? [])
+                  .map(
+                    (w) =>
+                      `${CHANNEL_LABELS[w.channel]}: ${w.last_failure_message || '수집 실패'}`
+                  )
+                  .join('\n')}
+              >
                 {item.warnings?.length ?? 0}채널
               </span>
             }
