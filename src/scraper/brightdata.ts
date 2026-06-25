@@ -31,10 +31,14 @@ export async function flushUsage(): Promise<void> {
     const supabase = createServiceClient();
     const { error } = await supabase.from('brightdata_usage_logs').insert(rows);
     if (error) {
-      console.error(`[brightdata] usage flush 실패: ${error.message}`);
+      // 일시적 DB 오류로 사용량 텔레메트리가 통째로 사라지지 않도록 버퍼 앞쪽에 되돌려
+      // 다음 flush(상품 단위 또는 종료 시 최종 flush)에서 재시도되게 한다.
+      buffer.unshift(...rows);
+      console.error(`[brightdata] usage flush 실패 — 재버퍼링: ${error.message}`);
     }
   } catch (err) {
-    console.error('[brightdata] usage flush 예외:', err);
+    buffer.unshift(...rows);
+    console.error('[brightdata] usage flush 예외 — 재버퍼링:', err);
   }
 }
 
@@ -47,6 +51,8 @@ export async function callWebUnlocker(opts: {
   channel: Channel;
   url: string;
   country?: string;
+  /** 이 호출의 최대 대기 시간(ms). 미지정 시 기본 60초. 쿠팡은 재시도 예산에 맞춰 조정해 호출한다. */
+  timeoutMs?: number;
 }): Promise<UnlockerResult> {
   const token = process.env.BRIGHTDATA_API_TOKEN;
   const zone = process.env.BRIGHTDATA_ZONE;
@@ -64,8 +70,9 @@ export async function callWebUnlocker(opts: {
   let ok = false;
 
   // 한 호출이 무한 hang 시 전체 수집이 묶이는 것을 방지.
-  // 쿠팡은 봇 우회 부담으로 30~50초 걸리는 경우가 흔해 60초로 둔다.
-  const REQUEST_TIMEOUT_MS = 60_000;
+  // 쿠팡은 봇 우회 부담으로 30~50초 걸리는 경우가 흔해 기본 60초로 둔다.
+  // 호출자가 timeoutMs를 주면(쿠팡 재시도 예산) 그 값을 우선한다.
+  const REQUEST_TIMEOUT_MS = opts.timeoutMs ?? 60_000;
 
   try {
     const res = await fetch('https://api.brightdata.com/request', {

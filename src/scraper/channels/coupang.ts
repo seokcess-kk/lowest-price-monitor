@@ -12,22 +12,51 @@ export interface ScrapeResult {
  * 이전에는 쿠팡 파트너스 API를 썼으나, 파트너스 API 가격이 웹사이트 실제 판매가와
  * 달라(와우·쿠폰 할인 미반영) 정확도 문제가 있어 Web Unlocker 방식으로 전환.
  *
- * Web Unlocker가 가끔 200 OK + 0바이트로 응답하는 경우가 있어 (실 측정 ~50% 비율).
- * 두 번 연속 발생도 자주 관측되므로 최대 3회 시도 + 재시도 사이 1.5초 백오프
- * (Bright Data 측에서 다른 우회 경로를 시도할 시간을 확보).
+ * Web Unlocker가 쿠팡에 대해 200 OK + 빈/짧은 본문이나 타임아웃을 자주 돌려준다
+ * (실측: 호출의 ~35%가 빈 응답 또는 60초 타임아웃). 빈 응답은 보통 빨리 돌아오고,
+ * 재요청 시 Bright Data가 다른 우회 경로를 잡아 성공하는 경우가 많다.
+ *
+ * 그래서 "고정 횟수 재시도" 대신 "총 시간 예산" 방식으로 재시도한다:
+ *   - 빈 응답(빠름)이 반복되면 예산 안에서 여러 번 더 시도 → 성공 확률↑
+ *   - 60초 타임아웃이 예산을 빠르게 소진하면 일찍 포기 → 워커가 한 상품에 과도하게 묶이지 않음
+ * 동시에 도는 다른 쿠팡 호출과 재시도 박자가 겹쳐 zone 큐에 몰리지 않도록 지터 백오프를 둔다.
  */
-const MAX_FETCH_ATTEMPTS = 3;
-const RETRY_BACKOFF_MS = 1_500;
+const MAX_FETCH_ATTEMPTS = 5;
+/** 한 상품의 쿠팡 수집에 쓸 수 있는 총 시간(재시도 포함). 초과 시 더는 시도하지 않는다. */
+const TOTAL_FETCH_BUDGET_MS = 150_000;
+/** 한 번의 Web Unlocker 호출 상한 (정상 응답이 ~53초까지도 걸려 60초 유지). */
+const ATTEMPT_TIMEOUT_MS = 60_000;
+const RETRY_BACKOFF_BASE_MS = 1_000;
+const RETRY_BACKOFF_MAX_MS = 4_000;
 const MIN_HTML_BYTES = 5_000;
 
 export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
   let html = '';
+  const startedAt = Date.now();
+  let attempt = 0; // 실제 callWebUnlocker 호출 횟수
 
-  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
-    if (attempt > 1) {
-      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+  while (attempt < MAX_FETCH_ATTEMPTS) {
+    // 남은 예산이 한 번의 의미 있는 시도에도 못 미치면 중단.
+    // (백오프보다 먼저 확인 — 어차피 호출하지 못할 시도의 백오프로 워커를 묶지 않도록)
+    if (TOTAL_FETCH_BUDGET_MS - (Date.now() - startedAt) < 5_000) {
+      console.warn(`[coupang] 재시도 예산 소진 (${attempt}회 시도)`);
+      break;
     }
-    const res = await callWebUnlocker({ channel: 'coupang', url });
+    if (attempt > 0) {
+      // 지터 섞은 백오프 — 동시 실행되는 쿠팡 호출들의 재시도가 한 박자로 몰리는 것을 분산
+      const backoff = Math.min(RETRY_BACKOFF_BASE_MS * (attempt + 1), RETRY_BACKOFF_MAX_MS);
+      const jitter = Math.floor(Math.random() * RETRY_BACKOFF_BASE_MS);
+      await new Promise((r) => setTimeout(r, backoff + jitter));
+    }
+
+    // 백오프로 시간이 더 흘렀을 수 있어 timeout은 현재 남은 예산 기준으로 다시 계산
+    const timeoutMs = Math.min(
+      ATTEMPT_TIMEOUT_MS,
+      Math.max(5_000, TOTAL_FETCH_BUDGET_MS - (Date.now() - startedAt))
+    );
+    attempt++;
+
+    const res = await callWebUnlocker({ channel: 'coupang', url, timeoutMs });
     if (!res.ok) {
       console.warn(`[coupang] Web Unlocker ${res.status} (attempt ${attempt})`);
       continue;
@@ -48,9 +77,7 @@ export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
   }
 
   if (!html) {
-    console.warn(
-      `[coupang] ${MAX_FETCH_ATTEMPTS}회 시도 모두 유효 HTML 확보 실패`
-    );
+    console.warn(`[coupang] ${attempt}회 시도 모두 유효 HTML 확보 실패`);
     return null;
   }
 

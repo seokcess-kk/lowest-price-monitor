@@ -225,20 +225,18 @@ export async function collectAll(
     return Math.abs(curr - baseline) / baseline >= SUSPICIOUS_THRESHOLD;
   };
 
-  // bulk insert를 위해 누적
-  const priceRows: Array<{
+  // 상품 단위로 즉시 저장하기 위한 row 타입.
+  // (예전엔 모든 상품을 모아 마지막에 한 번 bulk insert 했으나, 긴 실행이 중단되면
+  //  그 사이클의 수집 결과가 통째로 유실되는 문제가 있어 상품 단위 insert로 전환)
+  type PriceRow = {
     product_id: string;
     channel: Channel;
     price: number;
     store_name: string | null;
     is_manual: boolean;
     is_suspicious: boolean;
-  }> = [];
-  const errorRows: Array<{
-    product_id: string;
-    channel: Channel;
-    error_message: string;
-  }> = [];
+  };
+  type ErrorRow = { product_id: string; channel: Channel; error_message: string };
 
   // 진행률 콜백을 직렬화: 워커들이 동시에 완료해도 done 값이 역행하지 않도록
   // (값 capture는 워커 안에서 동기적으로 ++ 한 직후 enqueue → enqueue 순서 = done 순서)
@@ -255,6 +253,9 @@ export async function collectAll(
   };
 
   const processProduct = async (product: Product): Promise<void> => {
+    // 이 상품 분만 누적 — 3채널이 끝나면 즉시 DB에 기록한다.
+    const productPriceRows: PriceRow[] = [];
+    const productErrorRows: ErrorRow[] = [];
     // 한 상품의 3개 채널은 서로 다른 호스트이므로 동시에 호출
     const channelTasks = channels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
@@ -336,7 +337,7 @@ export async function collectAll(
           result.success = true;
           result.price = finalPrice;
           result.store_name = finalStore;
-          priceRows.push({
+          productPriceRows.push({
             product_id: product.id,
             channel,
             price: finalPrice,
@@ -347,7 +348,7 @@ export async function collectAll(
         } else {
           result.error = '가격 추출 실패';
           errors.push(`[${channel}] ${product.name}: 가격 추출 실패`);
-          errorRows.push({
+          productErrorRows.push({
             product_id: product.id,
             channel,
             error_message: '가격 추출 실패',
@@ -357,7 +358,7 @@ export async function collectAll(
         const message = error instanceof Error ? error.message : String(error);
         result.error = message;
         errors.push(`[${channel}] ${product.name}: ${message}`);
-        errorRows.push({
+        productErrorRows.push({
           product_id: product.id,
           channel,
           error_message: message,
@@ -367,6 +368,38 @@ export async function collectAll(
     });
 
     const productResults = await Promise.all(channelTasks);
+
+    // 상품 단위 즉시 저장 — 실행이 중간에 끊겨도 여기까지 끝난 상품은 보존된다.
+    if (productPriceRows.length > 0) {
+      const { error: insertError } = await supabase
+        .from('price_logs')
+        .insert(productPriceRows);
+      if (insertError) {
+        const message = `price_logs insert 실패 (${product.name}): ${insertError.message}`;
+        console.error(message);
+        errors.push(message);
+        // 저장 실패한 상품의 성공 결과는 실패로 되돌려 집계 왜곡 방지
+        for (const r of productResults) {
+          if (r.success) {
+            r.success = false;
+            r.error = message;
+          }
+        }
+      }
+    }
+    if (productErrorRows.length > 0) {
+      const { error: errInsertError } = await supabase
+        .from('scrape_errors')
+        .insert(productErrorRows);
+      if (errInsertError) {
+        console.error(
+          `scrape_errors insert 실패 (${product.name}): ${errInsertError.message}`
+        );
+      }
+    }
+    // Bright Data 사용량 로그도 상품 단위로 flush — 중단돼도 사용량 추적이 남도록
+    await flushUsage();
+
     for (const r of productResults) {
       if (r.error === 'no_url') continue; // URL 없음은 결과에서 제외
       results.push(r);
@@ -391,30 +424,8 @@ export async function collectAll(
   // 마지막 progress 콜백까지 flush
   await progressChain;
 
-  // bulk insert — 라운드트립 최소화
-  if (priceRows.length > 0) {
-    const { error: insertError } = await supabase.from('price_logs').insert(priceRows);
-    if (insertError) {
-      const message = `price_logs bulk insert 실패: ${insertError.message}`;
-      console.error(message);
-      errors.push(message);
-      // 저장 실패 시 success로 집계되지 않도록 모두 실패 처리
-      for (const r of results) {
-        if (r.success) {
-          r.success = false;
-          r.error = message;
-        }
-      }
-    }
-  }
-  if (errorRows.length > 0) {
-    const { error: errInsertError } = await supabase.from('scrape_errors').insert(errorRows);
-    if (errInsertError) {
-      console.error(`scrape_errors bulk insert 실패: ${errInsertError.message}`);
-    }
-  }
-
-  // Bright Data 사용량 로그 flush
+  // price_logs / scrape_errors 는 상품 단위로 이미 저장됨.
+  // 동시 처리 중 마지막 상품들의 사용량 버퍼에 남은 것이 있으면 최종 flush.
   await flushUsage();
 
   const success = results.filter((r) => r.success).length;
