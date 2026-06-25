@@ -15,23 +15,42 @@ async function main(): Promise<void> {
   const productId = process.env.COLLECT_PRODUCT_ID || null;
   const supabase = requestId ? createServiceClient() : null;
 
+  // 배치 수집: collect_requests row 에 저장된 product_ids 를 읽어 그 상품들만 수집
+  let batchProductIds: string[] | null = null;
   if (supabase && requestId) {
+    const { data: reqRow } = await supabase
+      .from('collect_requests')
+      .select('product_ids')
+      .eq('id', requestId)
+      .single();
+    const ids = (reqRow?.product_ids ?? null) as string[] | null;
+    if (Array.isArray(ids) && ids.length > 0) {
+      batchProductIds = ids;
+    }
+
     await supabase
       .from('collect_requests')
       .update({ status: 'running', started_at: new Date().toISOString() })
       .eq('id', requestId);
   }
 
+  // 우선순위: 단일 상품(env) > 배치(row.product_ids) > 전역(undefined)
+  const targetProductIds = productId
+    ? [productId]
+    : batchProductIds ?? undefined;
+
   console.log(
     productId
       ? `가격 수집 시작 (단일 상품 ${productId})...`
-      : '가격 수집 시작...'
+      : batchProductIds
+        ? `가격 수집 시작 (배치 ${batchProductIds.length}개 상품)...`
+        : '가격 수집 시작...'
   );
 
   try {
     const result = await collectAll({
       isManual: !!requestId,
-      productIds: productId ? [productId] : undefined,
+      productIds: targetProductIds,
       onProgress:
         supabase && requestId
           ? async (done, total) => {

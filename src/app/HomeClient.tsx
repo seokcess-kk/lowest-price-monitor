@@ -329,6 +329,52 @@ export default function Home() {
     });
   }, [data, search, filter, matchSearch, matchBrand]);
 
+  // 검색/변동필터/브랜드 중 하나라도 적용돼 부분집합을 보고 있는지
+  const isFiltered =
+    search.trim() !== '' || filter !== 'all' || brandSelection.size > 0;
+
+  // 현재 필터에 보이는 상품만 GitHub Actions로 일괄 수집
+  const handleCollectFiltered = useCallback(async () => {
+    if (isActive) {
+      toast.error('수집이 진행 중입니다. 완료 후 다시 시도해주세요.');
+      return;
+    }
+    const ids = filtered.map((f) => f.product_id);
+    if (ids.length === 0) {
+      toast.show('수집할 상품이 없습니다.', 'info');
+      return;
+    }
+    setCollecting(true);
+    setCollectStatus(null);
+    try {
+      const res = await fetch('/api/collect/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productIds: ids }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setCollectStatus({ status: 'failed', error_message: body.error });
+        toast.error(body.error || '수집 요청 실패');
+        return;
+      }
+      setCollectStatus({ status: 'pending' });
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem('collect_in_progress', '1');
+      }
+      pollRef.current = setInterval(pollStatus, 3000);
+      toast.success(`${ids.length}개 상품 수집을 시작했습니다.`);
+    } catch {
+      setCollectStatus({
+        status: 'failed',
+        error_message: '수집 요청 중 오류가 발생했습니다.',
+      });
+      toast.error('수집 요청 중 오류가 발생했습니다.');
+    } finally {
+      setCollecting(false);
+    }
+  }, [isActive, filtered, toast, pollStatus]);
+
   // 필터 칩 카운트 (검색 + 브랜드 적용 후 기준)
   const counts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -552,6 +598,24 @@ export default function Home() {
             matchedCount={filtered.length}
             totalCount={data.length}
           />
+
+          {isFiltered && filtered.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCollectFiltered}
+                disabled={collecting || isActive}
+                className="inline-flex items-center gap-1.5 min-h-9 px-3 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 text-sm font-medium"
+              >
+                {isActive
+                  ? '수집 중...'
+                  : `필터된 ${filtered.length}개 수집`}
+              </button>
+              <span className="text-xs text-gray-500">
+                현재 필터에 보이는 상품만 일괄 수집합니다 (GitHub Actions).
+              </span>
+            </div>
+          )}
 
           {filtered.length === 0 ? (
             <div className="bg-white rounded-lg shadow-sm border p-12 text-center text-gray-400">

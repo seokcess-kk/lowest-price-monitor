@@ -114,14 +114,26 @@ export async function collectAll(
   const results: CollectResult[] = [];
   const errors: string[] = [];
 
-  let query = supabase.from('products').select('*').eq('is_active', true);
+  let products: Product[] | null;
   if (productIds && productIds.length > 0) {
-    query = query.in('id', productIds);
-  }
-  const { data: products, error: fetchError } = await query;
-
-  if (fetchError) {
-    throw new Error(`상품 목록 조회 실패: ${fetchError.message}`);
+    // 배치가 크면 .in('id', [전체])가 URL 길이 한도를 넘으므로 청크 분할 조회
+    products = await selectByIdChunks<Product>(productIds, (ids, from, to) =>
+      supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true)
+        .in('id', ids)
+        .range(from, to)
+    );
+  } else {
+    const { data, error: fetchError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('is_active', true);
+    if (fetchError) {
+      throw new Error(`상품 목록 조회 실패: ${fetchError.message}`);
+    }
+    products = data;
   }
 
   if (!products || products.length === 0) {
