@@ -1,19 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import type { Channel } from '@/types/database';
-
-interface ErrorGroupRow {
-  product_id: string;
-  product_name: string;
-  brand_name: string | null;
-  channel: Channel;
-  consecutive_failures: number;
-  last_failure_at: string;
-  last_failure_message: string;
-  last_success_at: string | null;
-}
+import { useScrapeErrors, type ErrorGroupRow } from '@/hooks/useScrapeErrors';
+import { ErrorsSkeleton } from '@/components/Skeleton';
 
 const CHANNEL_LABELS: Record<Channel, string> = {
   coupang: '쿠팡',
@@ -50,33 +41,8 @@ function formatAbsolute(iso: string): string {
 }
 
 export default function ErrorsPage() {
-  const [rows, setRows] = useState<ErrorGroupRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const { rows, loading, error: fetchError } = useScrapeErrors();
   const [channelFilter, setChannelFilter] = useState<Channel | 'all'>('all');
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch('/api/errors?group_by=product_channel');
-        if (!res.ok) {
-          const body = await res.json();
-          throw new Error(body.error || '에러 로그를 불러오지 못했습니다.');
-        }
-        const data: ErrorGroupRow[] = await res.json();
-        if (!cancelled) setRows(data);
-      } catch (err) {
-        if (!cancelled) setFetchError(err instanceof Error ? err.message : '알 수 없는 오류');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const filtered = rows.filter((r) => {
     if (channelFilter !== 'all' && r.channel !== channelFilter) return false;
@@ -119,7 +85,7 @@ export default function ErrorsPage() {
         </div>
       </div>
 
-      {loading && <div className="text-center py-12 text-gray-500">로딩 중...</div>}
+      {loading && <ErrorsSkeleton />}
 
       {fetchError && (
         <div className="text-center py-12 text-red-500">오류: {fetchError}</div>

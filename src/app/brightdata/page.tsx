@@ -1,44 +1,10 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useToast } from '@/components/Toast';
 import { KpiCardSkeleton, Skeleton } from '@/components/Skeleton';
 import Sparkline from '@/components/Sparkline';
-
-interface Bucket {
-  total: number;
-  success: number;
-  failed: number;
-  bytes: number;
-  avgDurationMs: number;
-}
-
-interface ChannelBucket extends Bucket {
-  channel: string;
-}
-
-interface DailyBucket extends Bucket {
-  date: string;
-}
-
-interface UsageResponse {
-  today: Bucket;
-  month: Bucket;
-  byChannel: ChannelBucket[];
-  daily: DailyBucket[];
-}
-
-interface SyncResponse {
-  latest: {
-    period_start: string;
-    period_end: string;
-    request_count: number | null;
-    bandwidth_bytes: number | null;
-    fetched_at: string;
-  } | null;
-  localCount: number | null;
-  drift: number | null;
-}
+import { useBrightdataUsage, type Bucket } from '@/hooks/useBrightdataUsage';
 
 interface BalanceResponse {
   balance: number | null;
@@ -70,14 +36,11 @@ function formatUsd(amount: number): string {
 
 export default function BrightDataPage() {
   const toast = useToast();
-  const [usage, setUsage] = useState<UsageResponse | null>(null);
-  const [sync, setSync] = useState<SyncResponse | null>(null);
+  const { usage, sync, loading, error, refetch } = useBrightdataUsage();
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // 월말 예상 호출 수 (현재까지의 평균 일일 호출 수 × 이번 달 일수)
   const projected = useMemo(() => {
@@ -110,26 +73,8 @@ export default function BrightDataPage() {
     }
   };
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [u, s] = await Promise.all([
-        fetch('/api/brightdata/usage').then((r) => r.json()),
-        fetch('/api/brightdata/sync').then((r) => r.json()),
-      ]);
-      if (u.error) throw new Error(u.error);
-      setUsage(u);
-      if (!s.error) setSync(s);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '로드 실패');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // 잔액은 usage/sync를 담당하는 useBrightdataUsage와 별개로 마운트 시 1회 조회
   useEffect(() => {
-    load();
     loadBalance();
   }, []);
 
@@ -143,7 +88,7 @@ export default function BrightDataPage() {
         return;
       }
       toast.success('Bright Data 공식 통계 동기화 완료');
-      await load();
+      await refetch();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '동기화 실패');
     } finally {

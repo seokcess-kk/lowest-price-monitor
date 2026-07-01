@@ -26,7 +26,7 @@ import {
   hasRise,
 } from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
-import { KpiCardSkeleton, ProductCardSkeleton } from '@/components/Skeleton';
+import { DashboardSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
 
 // useUrlState용 안정 codec 참조 — 모듈 레벨로 빼두면 useEffect deps가 흔들리지 않음
@@ -529,20 +529,7 @@ export default function Home() {
         </div>
       )}
 
-      {loading && (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <KpiCardSkeleton key={i} />
-            ))}
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <ProductCardSkeleton key={i} />
-            ))}
-          </div>
-        </>
-      )}
+      {loading && <DashboardSkeleton />}
 
       {error && <div className="text-center py-12 text-red-500">오류: {error}</div>}
 

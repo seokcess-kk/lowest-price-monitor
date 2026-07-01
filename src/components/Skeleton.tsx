@@ -57,6 +57,54 @@ export function ProductRowSkeleton() {
   );
 }
 
+/** 메인 대시보드 본문(KPI + 카드 그리드) 스켈레톤 */
+export function DashboardSkeleton() {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 mb-6">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <KpiCardSkeleton key={i} />
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <ProductCardSkeleton key={i} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** 상품 관리 목록 스켈레톤 */
+export function ManageSkeleton() {
+  return (
+    <div className="space-y-2">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <ProductRowSkeleton key={i} />
+      ))}
+    </div>
+  );
+}
+
+/** 에러 로그 카드 그리드 스켈레톤 */
+export function ErrorsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div
+          key={i}
+          className="rounded-lg border border-gray-200 bg-white p-4 space-y-3"
+        >
+          <Skeleton className="h-4 w-2/3" />
+          <Skeleton className="h-8 w-16" />
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 차트 영역 스켈레톤 */
 export function ChartSkeleton({ height = 400 }: { height?: number }) {
   return (

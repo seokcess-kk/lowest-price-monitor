@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
@@ -93,9 +93,13 @@ export default function ManageProductsPage() {
     [products, focusId]
   );
 
-  useEffect(() => {
-    if (focusId) setExpanded((prev) => new Set([...prev, focusId]));
-  }, [focusId]);
+  // URL ?id= 로 진입하면 해당 행을 1회 펼친다. effect 대신 렌더 중 보정 패턴 —
+  // 이전 focusId를 기억해 focusId가 바뀔 때만 seeding하고, 이후 사용자 토글은 자유.
+  const [seededFocusId, setSeededFocusId] = useState<string | null>(null);
+  if (focusId && focusId !== seededFocusId) {
+    setSeededFocusId(focusId);
+    setExpanded((prev) => new Set([...prev, focusId]));
+  }
 
   // 검색 + 필터 + 정렬 (focusId가 있으면 그 상품만)
   const filtered = useMemo(() => {
@@ -135,7 +139,7 @@ export default function ManageProductsPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return list;
-  }, [products, search, statusFilter, brandSelection, opsPreset, sortKey, sortDir]);
+  }, [products, search, statusFilter, brandSelection, opsPreset, sortKey, sortDir, focusId, focusedProduct]);
 
   // 운영 프리셋 카운트 (다른 필터 무시한 절대값 — 클릭 의사결정용)
   const opsCounts = useMemo(() => {

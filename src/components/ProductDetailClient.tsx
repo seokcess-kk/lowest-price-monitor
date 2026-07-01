@@ -2,11 +2,18 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { usePriceHistory } from '@/hooks/usePriceHistory';
-import PriceChart from '@/components/PriceChart';
 import PriceChangeIndicator from '@/components/PriceChangeIndicator';
 import { ChartSkeleton } from '@/components/Skeleton';
 import type { Channel, PriceLog, Product } from '@/types/database';
+
+// recharts는 무거우므로 상세 페이지에서 지연 로드해 초기 청크에서 제외한다.
+// 청크 로딩 동안은 차트 스켈레톤을 노출해 loading.tsx와 시각적으로 이어지게 한다.
+const PriceChart = dynamic(() => import('@/components/PriceChart'), {
+  ssr: false,
+  loading: () => <ChartSkeleton height={400} />,
+});
 
 interface ChannelErrorSummary {
   channel: Channel;

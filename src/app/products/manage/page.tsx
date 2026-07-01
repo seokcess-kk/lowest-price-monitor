@@ -1,12 +1,20 @@
 import { Suspense } from 'react';
 import ManageProductsPage from './ManageClient';
+import { ManageSkeleton, Skeleton } from '@/components/Skeleton';
 
-// useSearchParams 사용 페이지는 Suspense + dynamic 렌더링 필요.
-export const dynamic = 'force-dynamic';
-
+// useSearchParams는 Suspense 경계만 있으면 됨. force-dynamic을 두면 셸이
+// 정적 프리렌더되지 않아 <Link> 프리페치가 셸 전체를 캐시하지 못하고
+// 전환마다 서버 왕복이 생긴다. 정적 셸 + 클라이언트 데이터 fetch로 둔다.
 export default function Page() {
   return (
-    <Suspense fallback={<div className="text-center py-12 text-gray-500">로딩 중...</div>}>
+    <Suspense
+      fallback={
+        <div>
+          <Skeleton className="h-7 w-40 mb-6" />
+          <ManageSkeleton />
+        </div>
+      }
+    >
       <ManageProductsPage />
     </Suspense>
   );
