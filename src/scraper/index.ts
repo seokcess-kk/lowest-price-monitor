@@ -35,6 +35,17 @@ const CLUSTER_BAND = 0.2;
  * 쿠팡 우회로 응답이 길어질 때 zone 큐잉으로 timeout이 누적되는 것을 막기 위해 보수적으로 2.
  */
 const PRODUCT_CONCURRENCY = 2;
+/** 연속 실패한 상품+채널은 Bright Data 호출 전에 잠시 쉬게 해 반복 과금을 막는다. */
+const FAILURE_BACKOFF_THRESHOLD = 3;
+const FAILURE_BACKOFF_LOOKBACK_DAYS = 30;
+const FAILURE_BACKOFF_MAX_DAYS = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface FailureBackoff {
+  consecutiveFailures: number;
+  lastFailureAt: string;
+  retryAfter: string;
+}
 
 /**
  * 7일 정상 가격 시계열에서 "주류 가격대"의 median을 추출한다.
@@ -83,6 +94,121 @@ function getChannelUrl(product: Product, channel: Channel): string | null {
     default:
       return null;
   }
+}
+
+function productChannelKey(productId: string, channel: Channel): string {
+  return `${productId}:${channel}`;
+}
+
+function backoffDays(consecutiveFailures: number): number {
+  return Math.min(
+    FAILURE_BACKOFF_MAX_DAYS,
+    Math.max(1, consecutiveFailures - FAILURE_BACKOFF_THRESHOLD + 1)
+  );
+}
+
+async function getRecentFailureRows(
+  supabase: ReturnType<typeof createServiceClient>,
+  productIds: string[],
+  sinceIso: string
+): Promise<Array<{ product_id: string; channel: Channel; created_at: string }>> {
+  const { data, error } = await supabase.rpc('recent_failures_per_channel', {
+    p_since: sinceIso,
+    p_product_ids: productIds,
+    p_per_group: 10,
+  });
+
+  if (!error) {
+    return (data ?? []) as Array<{
+      product_id: string;
+      channel: Channel;
+      created_at: string;
+    }>;
+  }
+
+  console.warn(
+    `[collectAll] recent_failures_per_channel RPC 실패 — fallback 조회 사용: ${error.message}`
+  );
+
+  return selectByIdChunks<{ product_id: string; channel: Channel; created_at: string }>(
+    productIds,
+    (ids, from, to) =>
+      supabase
+        .from('scrape_errors')
+        .select('product_id, channel, created_at')
+        .in('product_id', ids)
+        .gte('created_at', sinceIso)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+  );
+}
+
+async function buildFailureBackoffMap(
+  supabase: ReturnType<typeof createServiceClient>,
+  products: Product[]
+): Promise<Map<string, FailureBackoff>> {
+  const productIds = products.map((p) => p.id);
+  if (productIds.length === 0) return new Map();
+
+  const sinceIso = new Date(
+    Date.now() - FAILURE_BACKOFF_LOOKBACK_DAYS * DAY_MS
+  ).toISOString();
+
+  const [failureRows, successRows] = await Promise.all([
+    getRecentFailureRows(supabase, productIds, sinceIso),
+    selectByIdChunks<{ product_id: string; channel: Channel; collected_at: string }>(
+      productIds,
+      (ids, from, to) =>
+        supabase
+          .from('price_logs')
+          .select('product_id, channel, collected_at')
+          .in('product_id', ids)
+          .gte('collected_at', sinceIso)
+          .order('collected_at', { ascending: false })
+          .range(from, to)
+    ),
+  ]);
+
+  const lastSuccessTime = new Map<string, number>();
+  for (const row of successRows) {
+    const key = productChannelKey(row.product_id, row.channel);
+    const t = new Date(row.collected_at).getTime();
+    const prev = lastSuccessTime.get(key) ?? 0;
+    if (Number.isFinite(t) && t > prev) lastSuccessTime.set(key, t);
+  }
+
+  const groupedFailures = new Map<string, string[]>();
+  for (const row of failureRows) {
+    const key = productChannelKey(row.product_id, row.channel);
+    const failureTime = new Date(row.created_at).getTime();
+    const successTime = lastSuccessTime.get(key) ?? 0;
+    if (!Number.isFinite(failureTime) || failureTime <= successTime) continue;
+    const arr = groupedFailures.get(key);
+    if (arr) arr.push(row.created_at);
+    else groupedFailures.set(key, [row.created_at]);
+  }
+
+  const now = Date.now();
+  const backoffMap = new Map<string, FailureBackoff>();
+  for (const [key, failures] of groupedFailures) {
+    failures.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+    if (failures.length < FAILURE_BACKOFF_THRESHOLD) continue;
+
+    const lastFailureAt = failures[0];
+    const lastFailureTime = new Date(lastFailureAt).getTime();
+    if (!Number.isFinite(lastFailureTime)) continue;
+
+    const retryAt = lastFailureTime + backoffDays(failures.length) * DAY_MS;
+    if (retryAt <= now) continue;
+
+    backoffMap.set(key, {
+      consecutiveFailures: failures.length,
+      lastFailureAt,
+      retryAfter: new Date(retryAt).toISOString(),
+    });
+  }
+
+  return backoffMap;
 }
 
 interface CollectSummary {
@@ -208,8 +334,9 @@ export async function collectAll(
   // 카운트로 이기는 경우가 있어, tie 상황에서는 묶음(고가) 쪽으로 편향시킨다.
   const baselineProductIds = filteredProducts.map((p) => p.id);
   const baselineMap = new Map<string, number>(); // key: "productId:channel" → dominantPrice
+  let failureBackoffMap = new Map<string, FailureBackoff>();
   try {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const sevenDaysAgo = new Date(Date.now() - 7 * DAY_MS).toISOString();
     // 활성 상품이 많으면 .in(전체)가 URL 길이 한도를 넘어 baseline 조회가 통째로 실패한다 → 청크 분할.
     const recentLogs = await selectByIdChunks<{
       product_id: string;
@@ -238,6 +365,16 @@ export async function collectAll(
     }
   } catch (e) {
     console.warn('[collectAll] 이상치 baseline(dominantPrice) 조회 실패 (감지 생략):', e);
+  }
+  try {
+    failureBackoffMap = await buildFailureBackoffMap(supabase, filteredProducts);
+    if (failureBackoffMap.size > 0) {
+      console.log(
+        `[collectAll] 연속 실패 백오프 대상 ${failureBackoffMap.size}개 채널 — Bright Data 호출 skip`
+      );
+    }
+  } catch (e) {
+    console.warn('[collectAll] 실패 백오프 조회 실패 (백오프 생략):', e);
   }
 
   const isOutOfRange = (baseline: number | undefined, curr: number): boolean => {
@@ -276,18 +413,28 @@ export async function collectAll(
     // 이 상품 분만 누적 — 3채널이 끝나면 즉시 DB에 기록한다.
     const productPriceRows: PriceRow[] = [];
     const productErrorRows: ErrorRow[] = [];
-    // 한 상품의 3개 채널은 서로 다른 호스트이므로 동시에 호출
-    const channelTasks = channels.map(async (channel): Promise<CollectResult> => {
+    // URL이 존재하는 채널만 수집 task를 만든다. URL 없는 채널은 Bright Data 호출 대상이 아니다.
+    const activeChannels = channels.filter((channel) => !!getChannelUrl(product, channel));
+    // 한 상품의 채널들은 서로 다른 호스트이므로 동시에 호출
+    const channelTasks = activeChannels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
-      if (!url) {
-        return { product_id: product.id, channel, success: false, error: 'no_url' };
-      }
 
       const result: CollectResult = {
         product_id: product.id,
         channel,
         success: false,
       };
+
+      if (!url) return { ...result, error: 'no_url' };
+
+      const backoff = failureBackoffMap.get(productChannelKey(product.id, channel));
+      if (backoff) {
+        console.warn(
+          `[collectAll] 연속 실패 백오프 skip [${channel}] ${product.name}: ` +
+            `${backoff.consecutiveFailures}회 실패, retryAfter=${backoff.retryAfter}`
+        );
+        return { ...result, error: 'failure_backoff' };
+      }
 
       try {
         console.log(`[${channel}] ${product.name} 수집 중...`);
@@ -422,6 +569,7 @@ export async function collectAll(
 
     for (const r of productResults) {
       if (r.error === 'no_url') continue; // URL 없음은 결과에서 제외
+      if (r.error === 'failure_backoff') continue; // 의도적 skip은 실패 집계에서 제외
       results.push(r);
     }
 

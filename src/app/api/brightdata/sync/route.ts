@@ -120,25 +120,42 @@ export async function GET() {
 
     const startTs = new Date(latest.period_start as string).toISOString();
     const endTs = new Date(`${latest.period_end as string}T23:59:59.999Z`).toISOString();
-    const { count: localCount, error: countErr } = await supabase
-      .from('brightdata_usage_logs')
-      .select('*', { count: 'exact', head: true })
-      .gte('created_at', startTs)
-      .lte('created_at', endTs);
+    const [localCountRes, localSuccessCountRes] = await Promise.all([
+      supabase
+        .from('brightdata_usage_logs')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', startTs)
+        .lte('created_at', endTs),
+      supabase
+        .from('brightdata_usage_logs')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', startTs)
+        .lte('created_at', endTs)
+        .eq('success', true),
+    ]);
 
-    if (countErr) {
-      return NextResponse.json({ error: countErr.message }, { status: 500 });
+    if (localCountRes.error) {
+      return NextResponse.json({ error: localCountRes.error.message }, { status: 500 });
+    }
+    if (localSuccessCountRes.error) {
+      return NextResponse.json(
+        { error: localSuccessCountRes.error.message },
+        { status: 500 }
+      );
     }
 
     const remote = latest.request_count as number | null;
     const drift =
-      remote !== null && localCount !== null && localCount !== undefined
-        ? remote - localCount
+      remote !== null &&
+      localCountRes.count !== null &&
+      localCountRes.count !== undefined
+        ? remote - localCountRes.count
         : null;
 
     return NextResponse.json({
       latest,
-      localCount: localCount ?? 0,
+      localCount: localCountRes.count ?? 0,
+      localSuccessCount: localSuccessCountRes.count ?? 0,
       drift,
     });
   } catch (err) {

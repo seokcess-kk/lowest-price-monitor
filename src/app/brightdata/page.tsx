@@ -11,6 +11,8 @@ interface BalanceResponse {
   pendingBalance: number | null;
   currency: string;
   fetchedAt: string;
+  code?: string;
+  permissionUrl?: string;
 }
 
 function formatBytes(bytes: number): string {
@@ -22,12 +24,6 @@ function formatBytes(bytes: number): string {
 
 function formatNumber(n: number): string {
   return n.toLocaleString('ko-KR');
-}
-
-const WEB_UNLOCKER_CPM = 1.50;
-
-function calcCost(requests: number): number {
-  return (requests / 1000) * WEB_UNLOCKER_CPM;
 }
 
 function formatUsd(amount: number): string {
@@ -42,18 +38,12 @@ export default function BrightDataPage() {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  // 월말 예상 호출 수 (현재까지의 평균 일일 호출 수 × 이번 달 일수)
-  const projected = useMemo(() => {
-    if (!usage) return null;
-    const now = new Date();
-    const currentDay = now.getDate();
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    if (currentDay < 1) return null;
-    const ratePerDay = usage.month.total / currentDay;
-    const projectedTotal = Math.round(ratePerDay * daysInMonth);
-    const projectedBytes = Math.round((usage.month.bytes / currentDay) * daysInMonth);
-    return { total: projectedTotal, bytes: projectedBytes, daysInMonth, currentDay, cost: calcCost(projectedTotal) };
-  }, [usage]);
+  const projected = usage?.projected ?? null;
+  const balanceRunwayMonths = useMemo(() => {
+    if (!balance || balance.balance === null || !projected) return null;
+    if (projected.estimatedCostUsd <= 0) return null;
+    return balance.balance / projected.estimatedCostUsd;
+  }, [balance, projected]);
 
   const loadBalance = async () => {
     setBalanceLoading(true);
@@ -63,6 +53,7 @@ export default function BrightDataPage() {
       const body = await res.json();
       if (!res.ok) {
         setBalanceError(body.error ?? `잔액 조회 실패 (${res.status})`);
+        setBalance(body);
         return;
       }
       setBalance(body);
@@ -127,7 +118,22 @@ export default function BrightDataPage() {
           <div className="flex-1">
             <div className="text-sm text-gray-500 mb-2">계정 잔액 (USD)</div>
             {balanceError ? (
-              <div className="text-sm text-red-600">{balanceError}</div>
+              <div className="text-sm text-amber-700">
+                <div>{balanceError}</div>
+                {balance?.code === 'permission_denied' && balance.permissionUrl && (
+                  <a
+                    href={balance.permissionUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-block mt-1 text-blue-600 hover:text-blue-700 underline"
+                  >
+                    Bright Data 토큰 권한 설정 열기
+                  </a>
+                )}
+                <div className="mt-1 text-xs text-gray-500">
+                  잔액만 조회하지 못했습니다. 사용량과 예상 비용은 로컬 수집 로그 기준으로 계속 계산됩니다.
+                </div>
+              </div>
             ) : balance === null ? (
               <div className="text-sm text-gray-500">조회 중...</div>
             ) : (
@@ -144,17 +150,17 @@ export default function BrightDataPage() {
                   </div>
                   <div className="text-xs text-gray-400 mt-1">보류 (pending)</div>
                 </div>
-                {projected && balance.balance !== null && projected.cost > 0 && (
+                {balanceRunwayMonths !== null && projected && (
                   <div>
                     <div
                       className={`text-xl font-semibold ${
-                        balance.balance < projected.cost ? 'text-red-600' : 'text-gray-700'
+                        balanceRunwayMonths < 1 ? 'text-red-600' : 'text-gray-700'
                       }`}
                     >
-                      {(balance.balance / projected.cost).toFixed(1)}개월
+                      {balanceRunwayMonths.toFixed(1)}개월
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
-                      현재 페이스 기준 (월 {formatUsd(projected.cost)})
+                      현재 페이스 기준 (월 {formatUsd(projected.estimatedCostUsd)})
                     </div>
                   </div>
                 )}
@@ -177,7 +183,7 @@ export default function BrightDataPage() {
       {/* 오늘/이번 달/예상 KPI */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <BucketCard title="오늘 (KST)" bucket={usage.today} />
-        <BucketCard title="이번 달 (KST)" bucket={usage.month} cost={calcCost(usage.month.total)} />
+        <BucketCard title="이번 달 (KST)" bucket={usage.month} />
         {projected && (
           <div className="bg-white rounded-lg shadow-sm border p-6">
             <div className="text-sm text-gray-500 mb-2">월말 예상</div>
@@ -185,7 +191,7 @@ export default function BrightDataPage() {
               {formatNumber(projected.total)}
             </div>
             <div className="text-lg font-semibold text-blue-600 mb-3">
-              {formatUsd(projected.cost)}
+              {formatUsd(projected.estimatedCostUsd)}
               <span className="text-xs text-gray-400 ml-1">예상 비용</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -196,9 +202,9 @@ export default function BrightDataPage() {
                 </div>
               </div>
               <div>
-                <div className="text-gray-500">진행률</div>
+                <div className="text-gray-500">월 경과율</div>
                 <div className="font-semibold text-gray-700">
-                  {projected.currentDay}/{projected.daysInMonth}일
+                  {(projected.elapsedMonthRatio * 100).toFixed(1)}%
                 </div>
               </div>
             </div>
@@ -206,12 +212,27 @@ export default function BrightDataPage() {
               <div
                 className="bg-blue-500 h-1.5"
                 style={{
-                  width: `${Math.round((projected.currentDay / projected.daysInMonth) * 100)}%`,
+                  width: `${Math.round(projected.elapsedMonthRatio * 100)}%`,
                 }}
               />
             </div>
+            <div className="mt-2 text-xs text-gray-500">
+              성공 요청 {formatNumber(projected.success)}건 기준
+            </div>
           </div>
         )}
+      </div>
+
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-6 text-sm text-blue-900">
+        비용 추정은 Bright Data Web Unlocker의 성공 요청 기준 과금 모델을 따라 로컬 로그의
+        성공 요청 수로 계산합니다. 현재 설정은 {formatUsd(usage.pricing.cpmUsd)}/1K 성공 요청
+        {usage.pricing.includedRequests > 0
+          ? `, 포함 요청 ${formatNumber(usage.pricing.includedRequests)}건`
+          : ''}
+        {usage.pricing.monthlyCommitmentUsd > 0
+          ? `, 월 기본료 ${formatUsd(usage.pricing.monthlyCommitmentUsd)}`
+          : ''}
+        입니다.
       </div>
 
       {/* 채널별 분포 */}
@@ -226,6 +247,7 @@ export default function BrightDataPage() {
                 <th className="py-2">채널</th>
                 <th className="py-2 text-right">호출</th>
                 <th className="py-2 text-right">성공</th>
+                <th className="py-2 text-right">예상 비용</th>
                 <th className="py-2 text-right">실패율</th>
                 <th className="py-2 text-right">평균 소요</th>
                 <th className="py-2 text-right">대역폭</th>
@@ -237,6 +259,9 @@ export default function BrightDataPage() {
                   <td className="py-2 font-medium text-gray-900">{c.channel}</td>
                   <td className="py-2 text-right text-gray-700">{formatNumber(c.total)}</td>
                   <td className="py-2 text-right text-gray-700">{formatNumber(c.success)}</td>
+                  <td className="py-2 text-right text-blue-700 font-medium">
+                    {formatUsd(c.estimatedCostUsd)}
+                  </td>
                   <td className="py-2 text-right text-gray-700">
                     {c.total === 0 ? '-' : `${((c.failed / c.total) * 100).toFixed(1)}%`}
                   </td>
@@ -269,6 +294,7 @@ export default function BrightDataPage() {
                 <th className="py-2">날짜</th>
                 <th className="py-2 text-right">호출</th>
                 <th className="py-2 text-right">실패</th>
+                <th className="py-2 text-right">예상 비용</th>
                 <th className="py-2 text-right">평균 소요</th>
                 <th className="py-2 text-right">대역폭</th>
               </tr>
@@ -279,6 +305,9 @@ export default function BrightDataPage() {
                   <td className="py-2 text-gray-700">{d.date}</td>
                   <td className="py-2 text-right text-gray-700">{formatNumber(d.total)}</td>
                   <td className="py-2 text-right text-gray-700">{formatNumber(d.failed)}</td>
+                  <td className="py-2 text-right text-blue-700 font-medium">
+                    {formatUsd(d.estimatedCostUsd)}
+                  </td>
                   <td className="py-2 text-right text-gray-700">{d.avgDurationMs} ms</td>
                   <td className="py-2 text-right text-gray-700">{formatBytes(d.bytes)}</td>
                 </tr>
@@ -321,15 +350,18 @@ export default function BrightDataPage() {
               </span>
               {sync.latest.request_count !== null && (
                 <span className="ml-2 text-blue-600 font-semibold">
-                  ({formatUsd(calcCost(sync.latest.request_count))})
+                  ({formatUsd((sync.latest.request_count / 1000) * usage.pricing.cpmUsd)})
                 </span>
               )}
             </div>
             <div className="text-gray-700">
               로컬 카운트:{' '}
               <span className="font-semibold">{formatNumber(sync.localCount ?? 0)}</span>
+              <span className="ml-2 text-gray-500">
+                성공 {formatNumber(sync.localSuccessCount ?? 0)}건
+              </span>
               <span className="ml-2 text-blue-600 font-semibold">
-                ({formatUsd(calcCost(sync.localCount ?? 0))})
+                ({formatUsd(((sync.localSuccessCount ?? 0) / 1000) * usage.pricing.cpmUsd)})
               </span>
             </div>
             {sync.drift !== null && (
@@ -355,16 +387,15 @@ export default function BrightDataPage() {
 
 function BucketCard({ title, bucket, cost }: { title: string; bucket: Bucket; cost?: number }) {
   const failRate = bucket.total === 0 ? 0 : (bucket.failed / bucket.total) * 100;
+  const displayCost = cost ?? bucket.estimatedCostUsd;
   return (
     <div className="bg-white rounded-lg shadow-sm border p-6">
       <div className="text-sm text-gray-500 mb-2">{title}</div>
-      <div className={`text-3xl font-bold text-gray-900 ${cost !== undefined ? 'mb-1' : 'mb-3'}`}>{formatNumber(bucket.total)}</div>
-      {cost !== undefined && (
-        <div className="text-lg font-semibold text-blue-600 mb-3">
-          {formatUsd(cost)}
-          <span className="text-xs text-gray-400 ml-1">현재 비용</span>
-        </div>
-      )}
+      <div className="text-3xl font-bold text-gray-900 mb-1">{formatNumber(bucket.total)}</div>
+      <div className="text-lg font-semibold text-blue-600 mb-3">
+        {formatUsd(displayCost)}
+        <span className="text-xs text-gray-400 ml-1">성공 요청 기준</span>
+      </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>
           <div className="text-gray-500">성공</div>

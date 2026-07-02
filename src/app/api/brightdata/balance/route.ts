@@ -25,6 +25,33 @@ export async function GET() {
 
     const text = await res.text();
     if (!res.ok) {
+      if (res.status === 401) {
+        return NextResponse.json(
+          {
+            error:
+              'Bright Data API 토큰이 유효하지 않습니다. 배포 환경의 BRIGHTDATA_API_TOKEN 값을 확인해주세요.',
+            code: 'invalid_credentials',
+            upstreamStatus: res.status,
+            upstreamMessage: text.slice(0, 500),
+          },
+          { status: 401 }
+        );
+      }
+
+      if (res.status === 403) {
+        return NextResponse.json(
+          {
+            error:
+              'Bright Data API 토큰에 계정 잔액 조회 권한이 없습니다. 토큰 권한을 조정하면 잔액 조회가 가능합니다.',
+            code: 'permission_denied',
+            permissionUrl: 'https://brightdata.com/cp/setting/users',
+            upstreamStatus: res.status,
+            upstreamMessage: text.slice(0, 500),
+          },
+          { status: 403 }
+        );
+      }
+
       return NextResponse.json(
         { error: `Bright Data balance API ${res.status}: ${text.slice(0, 500)}` },
         { status: 502 }

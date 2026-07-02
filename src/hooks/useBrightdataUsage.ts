@@ -6,6 +6,7 @@ export interface Bucket {
   failed: number;
   bytes: number;
   avgDurationMs: number;
+  estimatedCostUsd: number;
 }
 
 export interface ChannelBucket extends Bucket {
@@ -17,8 +18,26 @@ export interface DailyBucket extends Bucket {
 }
 
 export interface UsageResponse {
+  pricing: {
+    currency: string;
+    billableMetric: 'successful_requests';
+    cpmUsd: number;
+    includedRequests: number;
+    monthlyCommitmentUsd: number;
+  };
   today: Bucket;
   month: Bucket;
+  projected: {
+    total: number;
+    success: number;
+    failed: number;
+    bytes: number;
+    estimatedCostUsd: number;
+    elapsedMonthRatio: number;
+    periodStart: string;
+    periodEnd: string;
+    generatedAt: string;
+  };
   byChannel: ChannelBucket[];
   daily: DailyBucket[];
 }
@@ -32,6 +51,7 @@ export interface SyncResponse {
     fetched_at: string;
   } | null;
   localCount: number | null;
+  localSuccessCount: number | null;
   drift: number | null;
 }
 
