@@ -11,6 +11,9 @@ interface BalanceResponse {
   pendingBalance: number | null;
   currency: string;
   fetchedAt: string;
+}
+
+interface BalanceErrorResponse {
   code?: string;
   permissionUrl?: string;
 }
@@ -35,12 +38,13 @@ export default function BrightDataPage() {
   const { usage, sync, loading, error, refetch } = useBrightdataUsage();
   const [balance, setBalance] = useState<BalanceResponse | null>(null);
   const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [balanceErrorMeta, setBalanceErrorMeta] = useState<BalanceErrorResponse | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
   const projected = usage?.projected ?? null;
   const balanceRunwayMonths = useMemo(() => {
-    if (!balance || balance.balance === null || !projected) return null;
+    if (!balance || typeof balance.balance !== 'number' || !projected) return null;
     if (projected.estimatedCostUsd <= 0) return null;
     return balance.balance / projected.estimatedCostUsd;
   }, [balance, projected]);
@@ -48,12 +52,16 @@ export default function BrightDataPage() {
   const loadBalance = async () => {
     setBalanceLoading(true);
     setBalanceError(null);
+    setBalanceErrorMeta(null);
     try {
       const res = await fetch('/api/brightdata/balance', { cache: 'no-store' });
       const body = await res.json();
       if (!res.ok) {
         setBalanceError(body.error ?? `잔액 조회 실패 (${res.status})`);
-        setBalance(body);
+        setBalanceErrorMeta({
+          code: body.code,
+          permissionUrl: body.permissionUrl,
+        });
         return;
       }
       setBalance(body);
@@ -120,9 +128,10 @@ export default function BrightDataPage() {
             {balanceError ? (
               <div className="text-sm text-amber-700">
                 <div>{balanceError}</div>
-                {balance?.code === 'permission_denied' && balance.permissionUrl && (
+                {balanceErrorMeta?.code === 'permission_denied' &&
+                  balanceErrorMeta.permissionUrl && (
                   <a
-                    href={balance.permissionUrl}
+                    href={balanceErrorMeta.permissionUrl}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-block mt-1 text-blue-600 hover:text-blue-700 underline"
