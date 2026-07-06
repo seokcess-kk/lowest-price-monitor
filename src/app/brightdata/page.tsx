@@ -9,6 +9,7 @@ import { useBrightdataUsage, type Bucket } from '@/hooks/useBrightdataUsage';
 interface BalanceResponse {
   balance: number | null;
   pendingBalance: number | null;
+  pendingCosts: number | null;
   currency: string;
   fetchedAt: string;
 }
@@ -43,11 +44,29 @@ export default function BrightDataPage() {
   const [syncing, setSyncing] = useState(false);
 
   const projected = usage?.projected ?? null;
+  const official = usage?.official ?? null;
+
+  // 월 예상 비용은 공식 과금 기준(누적 official 비용을 월 경과율로 나눠 월말 추정)을 우선하고,
+  // 공식 값이 없으면 로컬 성공수 기반 projected로 폴백한다.
+  const officialMonthlyCostUsd = useMemo(() => {
+    if (official && projected && projected.elapsedMonthRatio > 0) {
+      return official.estimatedCostUsd / projected.elapsedMonthRatio;
+    }
+    return projected?.estimatedCostUsd ?? null;
+  }, [official, projected]);
+
+  const officialProjectedRequests = useMemo(() => {
+    if (official && projected && projected.elapsedMonthRatio > 0) {
+      return Math.round(official.totalRequests / projected.elapsedMonthRatio);
+    }
+    return projected?.total ?? null;
+  }, [official, projected]);
+
   const balanceRunwayMonths = useMemo(() => {
-    if (!balance || typeof balance.balance !== 'number' || !projected) return null;
-    if (projected.estimatedCostUsd <= 0) return null;
-    return balance.balance / projected.estimatedCostUsd;
-  }, [balance, projected]);
+    if (!balance || typeof balance.balance !== 'number') return null;
+    if (!officialMonthlyCostUsd || officialMonthlyCostUsd <= 0) return null;
+    return balance.balance / officialMonthlyCostUsd;
+  }, [balance, officialMonthlyCostUsd]);
 
   const loadBalance = async () => {
     setBalanceLoading(true);
@@ -155,11 +174,11 @@ export default function BrightDataPage() {
                 </div>
                 <div>
                   <div className="text-xl font-semibold text-gray-700">
-                    {balance.pendingBalance !== null ? formatUsd(balance.pendingBalance) : '—'}
+                    {balance.pendingCosts !== null ? formatUsd(balance.pendingCosts) : '—'}
                   </div>
-                  <div className="text-xs text-gray-400 mt-1">보류 (pending)</div>
+                  <div className="text-xs text-gray-400 mt-1">미청구 비용 (pending)</div>
                 </div>
-                {balanceRunwayMonths !== null && projected && (
+                {balanceRunwayMonths !== null && officialMonthlyCostUsd !== null && (
                   <div>
                     <div
                       className={`text-xl font-semibold ${
@@ -169,7 +188,7 @@ export default function BrightDataPage() {
                       {balanceRunwayMonths.toFixed(1)}개월
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
-                      현재 페이스 기준 (월 {formatUsd(projected.estimatedCostUsd)})
+                      현재 페이스 기준 (월 {formatUsd(officialMonthlyCostUsd)})
                     </div>
                   </div>
                 )}
@@ -191,17 +210,49 @@ export default function BrightDataPage() {
 
       {/* 오늘/이번 달/예상 KPI */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <BucketCard title="오늘 (KST)" bucket={usage.today} />
-        <BucketCard title="이번 달 (KST)" bucket={usage.month} />
+        <BucketCard title="오늘 (KST)" bucket={usage.today} costLabel="로컬 관측 · 참고용" />
+
+        {/* 이번 달 비용 — 공식 과금 기준 우선, 없으면 로컬 추정 */}
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <div className="text-sm text-gray-500 mb-2">이번 달</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1">
+            {formatNumber(official ? official.totalRequests : usage.month.total)}
+          </div>
+          <div className="text-lg font-semibold text-blue-600 mb-3">
+            {formatUsd(official ? official.estimatedCostUsd : usage.month.estimatedCostUsd)}
+            <span className="text-xs text-gray-400 ml-1">
+              {official ? '공식 과금 기준' : '로컬 추정'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <div className="text-gray-500">
+                {official ? '공식 과금 요청' : '로컬 성공'}
+              </div>
+              <div className="font-semibold text-gray-700">
+                {formatNumber(official ? official.totalRequests : usage.month.success)}
+              </div>
+            </div>
+            <div>
+              <div className="text-gray-500">로컬 관측 호출</div>
+              <div className="font-semibold text-gray-700">
+                {formatNumber(usage.month.total)}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {projected && (
           <div className="bg-white rounded-lg shadow-sm border p-6">
             <div className="text-sm text-gray-500 mb-2">월말 예상</div>
             <div className="text-3xl font-bold text-gray-900 mb-1">
-              {formatNumber(projected.total)}
+              {formatNumber(officialProjectedRequests ?? projected.total)}
             </div>
             <div className="text-lg font-semibold text-blue-600 mb-3">
-              {formatUsd(projected.estimatedCostUsd)}
-              <span className="text-xs text-gray-400 ml-1">예상 비용</span>
+              {formatUsd(officialMonthlyCostUsd ?? projected.estimatedCostUsd)}
+              <span className="text-xs text-gray-400 ml-1">
+                {official ? '예상 비용 (공식 기준)' : '예상 비용 (로컬 추정)'}
+              </span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div>
@@ -226,15 +277,19 @@ export default function BrightDataPage() {
               />
             </div>
             <div className="mt-2 text-xs text-gray-500">
-              성공 요청 {formatNumber(projected.success)}건 기준
+              {official
+                ? `공식 과금 요청 ${formatNumber(officialProjectedRequests ?? 0)}건 기준`
+                : `성공 요청 ${formatNumber(projected.success)}건 기준 (로컬 추정)`}
             </div>
           </div>
         )}
       </div>
 
       <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-6 text-sm text-blue-900">
-        비용 추정은 Bright Data Web Unlocker의 성공 요청 기준 과금 모델을 따라 로컬 로그의
-        성공 요청 수로 계산합니다. 현재 설정은 {formatUsd(usage.pricing.cpmUsd)}/1K 성공 요청
+        비용은 Bright Data 공식 과금 요청 수(/domains/req)를 기준으로 계산합니다
+        {official ? '' : ' (공식 API 조회 실패 시 로컬 추정으로 폴백)'}. 로컬 수집 로그는
+        재시도·무효응답(200 OK지만 차단·빈 응답)까지 포함해 실제 과금보다 많을 수 있어 참고용
+        관측치입니다. 단가는 {formatUsd(usage.pricing.cpmUsd)}/1K 요청
         {usage.pricing.includedRequests > 0
           ? `, 포함 요청 ${formatNumber(usage.pricing.includedRequests)}건`
           : ''}
@@ -246,47 +301,99 @@ export default function BrightDataPage() {
 
       {/* 채널별 분포 */}
       <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">채널별 (이번 달)</h2>
-        {usage.byChannel.length === 0 ? (
-          <div className="text-sm text-gray-500">데이터 없음</div>
+        {official ? (
+          <>
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">
+              채널별 (이번 달 · 공식 과금 기준)
+            </h2>
+            {official.byChannel.length === 0 ? (
+              <div className="text-sm text-gray-500">데이터 없음</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-gray-500 text-left">
+                  <tr>
+                    <th className="py-2">채널</th>
+                    <th className="py-2 text-right">공식 요청수</th>
+                    <th className="py-2 text-right">공식 비용</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {official.byChannel.map((c) => (
+                    <tr key={c.channel}>
+                      <td className="py-2 font-medium text-gray-900">{c.channel}</td>
+                      <td className="py-2 text-right text-gray-700">
+                        {formatNumber(c.requests)}
+                      </td>
+                      <td className="py-2 text-right text-blue-700 font-medium">
+                        {formatUsd(c.estimatedCostUsd)}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-gray-200 font-semibold">
+                    <td className="py-2 text-gray-900">합계</td>
+                    <td className="py-2 text-right text-gray-900">
+                      {formatNumber(official.totalRequests)}
+                    </td>
+                    <td className="py-2 text-right text-blue-700">
+                      {formatUsd(official.estimatedCostUsd)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </>
         ) : (
-          <table className="w-full text-sm">
-            <thead className="text-gray-500 text-left">
-              <tr>
-                <th className="py-2">채널</th>
-                <th className="py-2 text-right">호출</th>
-                <th className="py-2 text-right">성공</th>
-                <th className="py-2 text-right">예상 비용</th>
-                <th className="py-2 text-right">실패율</th>
-                <th className="py-2 text-right">평균 소요</th>
-                <th className="py-2 text-right">대역폭</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {usage.byChannel.map((c) => (
-                <tr key={c.channel}>
-                  <td className="py-2 font-medium text-gray-900">{c.channel}</td>
-                  <td className="py-2 text-right text-gray-700">{formatNumber(c.total)}</td>
-                  <td className="py-2 text-right text-gray-700">{formatNumber(c.success)}</td>
-                  <td className="py-2 text-right text-blue-700 font-medium">
-                    {formatUsd(c.estimatedCostUsd)}
-                  </td>
-                  <td className="py-2 text-right text-gray-700">
-                    {c.total === 0 ? '-' : `${((c.failed / c.total) * 100).toFixed(1)}%`}
-                  </td>
-                  <td className="py-2 text-right text-gray-700">{c.avgDurationMs} ms</td>
-                  <td className="py-2 text-right text-gray-700">{formatBytes(c.bytes)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">
+              채널별 (이번 달 · 로컬 관측)
+            </h2>
+            {usage.byChannel.length === 0 ? (
+              <div className="text-sm text-gray-500">데이터 없음</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-gray-500 text-left">
+                  <tr>
+                    <th className="py-2">채널</th>
+                    <th className="py-2 text-right">호출</th>
+                    <th className="py-2 text-right">성공</th>
+                    <th className="py-2 text-right">예상 비용</th>
+                    <th className="py-2 text-right">실패율</th>
+                    <th className="py-2 text-right">평균 소요</th>
+                    <th className="py-2 text-right">대역폭</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {usage.byChannel.map((c) => (
+                    <tr key={c.channel}>
+                      <td className="py-2 font-medium text-gray-900">{c.channel}</td>
+                      <td className="py-2 text-right text-gray-700">{formatNumber(c.total)}</td>
+                      <td className="py-2 text-right text-gray-700">{formatNumber(c.success)}</td>
+                      <td className="py-2 text-right text-blue-700 font-medium">
+                        {formatUsd(c.estimatedCostUsd)}
+                      </td>
+                      <td className="py-2 text-right text-gray-700">
+                        {c.total === 0 ? '-' : `${((c.failed / c.total) * 100).toFixed(1)}%`}
+                      </td>
+                      <td className="py-2 text-right text-gray-700">{c.avgDurationMs} ms</td>
+                      <td className="py-2 text-right text-gray-700">{formatBytes(c.bytes)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
         )}
       </div>
 
-      {/* 일별 추이 */}
+      {/* 일별 추이 (로컬 관측 · 재시도·무효응답 포함, 참고용) */}
       <div className="bg-white rounded-lg shadow-sm border p-6 mb-6">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-          <h2 className="text-lg font-semibold text-gray-800">일별 추이 (최근 14일)</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">일별 추이 (최근 14일)</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              로컬 관측 · 재시도·무효응답 포함, 참고용
+            </p>
+          </div>
           {usage.daily.length >= 2 && (
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <span>호출 수</span>
@@ -394,7 +501,17 @@ export default function BrightDataPage() {
   );
 }
 
-function BucketCard({ title, bucket, cost }: { title: string; bucket: Bucket; cost?: number }) {
+function BucketCard({
+  title,
+  bucket,
+  cost,
+  costLabel,
+}: {
+  title: string;
+  bucket: Bucket;
+  cost?: number;
+  costLabel?: string;
+}) {
   const failRate = bucket.total === 0 ? 0 : (bucket.failed / bucket.total) * 100;
   const displayCost = cost ?? bucket.estimatedCostUsd;
   return (
@@ -403,7 +520,7 @@ function BucketCard({ title, bucket, cost }: { title: string; bucket: Bucket; co
       <div className="text-3xl font-bold text-gray-900 mb-1">{formatNumber(bucket.total)}</div>
       <div className="text-lg font-semibold text-blue-600 mb-3">
         {formatUsd(displayCost)}
-        <span className="text-xs text-gray-400 ml-1">성공 요청 기준</span>
+        <span className="text-xs text-gray-400 ml-1">{costLabel ?? '성공 요청 기준'}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div>

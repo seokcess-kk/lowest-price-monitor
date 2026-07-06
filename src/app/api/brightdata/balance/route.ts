@@ -3,7 +3,9 @@ import { NextResponse } from 'next/server';
 /**
  * Bright Data 계정 잔액 조회.
  * GET https://api.brightdata.com/customer/balance
- * 응답: { balance: number, pending_balance: number }  (단위: USD)
+ * 실측 응답: { balance, credit, prepayment, pending_costs }  (단위: USD)
+ *   - pending_costs: 이번 청구주기의 미청구 누적 비용(실제 소진에 가장 근접)
+ *   - pending_balance 필드는 응답에 존재하지 않아 항상 null이었음 → pendingCosts로 대체
  *
  * DB에 저장하지 않고 매 요청마다 실시간 조회한다 — 잔액 추이 분석은 별도 요구가 없는 한 불필요.
  */
@@ -70,12 +72,16 @@ export async function GET() {
 
     const obj = (parsed ?? {}) as Record<string, unknown>;
     const balance = typeof obj.balance === 'number' ? obj.balance : null;
+    // 하위호환: 응답에 없어 항상 null이지만 기존 소비처 보호를 위해 유지
     const pendingBalance =
       typeof obj.pending_balance === 'number' ? obj.pending_balance : null;
+    const pendingCosts =
+      typeof obj.pending_costs === 'number' ? obj.pending_costs : null;
 
     return NextResponse.json({
       balance,
       pendingBalance,
+      pendingCosts,
       currency: 'USD',
       fetchedAt: new Date().toISOString(),
       raw: parsed,

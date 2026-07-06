@@ -40,6 +40,11 @@ export interface UsageResponse {
   };
   byChannel: ChannelBucket[];
   daily: DailyBucket[];
+  official: {
+    byChannel: Array<{ channel: string; requests: number; estimatedCostUsd: number }>;
+    totalRequests: number;
+    estimatedCostUsd: number;
+  } | null;
 }
 
 export interface SyncResponse {
