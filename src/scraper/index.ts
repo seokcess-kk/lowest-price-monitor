@@ -40,6 +40,12 @@ const FAILURE_BACKOFF_THRESHOLD = 3;
 const FAILURE_BACKOFF_LOOKBACK_DAYS = 30;
 const FAILURE_BACKOFF_MAX_DAYS = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** 이 기간(일) 내 정상 가격이 전혀 변하지 않았으면 "무변동"으로 보고 저빈도 수집으로 전환한다. */
+const STABLE_WINDOW_DAYS = 14;
+/** 무변동으로 판정된 (상품×채널)을 이 주기(일)마다 1회만 수집한다. */
+const LOW_FREQ_INTERVAL_DAYS = 3;
+/** 무변동 판정에 필요한 이력 조회 기간. STABLE_WINDOW_DAYS + 여유. */
+const DIFF_HISTORY_LOOKBACK_DAYS = 15;
 
 interface FailureBackoff {
   consecutiveFailures: number;
@@ -105,6 +111,40 @@ function backoffDays(consecutiveFailures: number): number {
     FAILURE_BACKOFF_MAX_DAYS,
     Math.max(1, consecutiveFailures - FAILURE_BACKOFF_THRESHOLD + 1)
   );
+}
+
+/**
+ * 크론 전역 수집에서, 최근 STABLE_WINDOW_DAYS 내 정상 가격이 전혀 변하지 않은
+ * (상품×채널)은 LOW_FREQ_INTERVAL_DAYS 주기로만 수집한다.
+ * 판정 근거(이력)가 부족하면 매일 수집(false)으로 폴백 — 절감보다 신선도 우선.
+ */
+function shouldSkipByLowFreq(
+  history: { prices: number[]; times: number[] } | undefined,
+  now: number
+): boolean {
+  if (!history) return false;
+
+  const cutoff = now - STABLE_WINDOW_DAYS * DAY_MS;
+  const windowPrices: number[] = [];
+  for (let i = 0; i < history.times.length; i++) {
+    if (history.times[i] >= cutoff) windowPrices.push(history.prices[i]);
+  }
+  // 판정 근거가 1개 이하면 "무변동"이라 단정할 수 없다 → 수집
+  if (windowPrices.length < 2) return false;
+
+  let min = windowPrices[0];
+  let max = windowPrices[0];
+  for (const p of windowPrices) {
+    if (p < min) min = p;
+    if (p > max) max = p;
+  }
+  // 창 안에서 가격이 한 번이라도 달라졌으면 신선도 우선 → 매일 수집
+  if (min !== max) return false;
+
+  // cron 지터로 수집 시각이 앞뒤로 흔들려도 주기가 밀리지 않도록 0.5일 마진
+  const lastCollectedAt = Math.max(...history.times);
+  const daysSinceLast = (now - lastCollectedAt) / DAY_MS;
+  return daysSinceLast < LOW_FREQ_INTERVAL_DAYS - 0.5;
 }
 
 async function getRecentFailureRows(
@@ -236,6 +276,8 @@ export async function collectAll(
   const isManual = options?.isManual ?? false;
   const productIds = options?.productIds;
   const onProgress = options?.onProgress;
+  // 저빈도 차등은 크론 전역 수집에만 적용 — 즉시 수집(버튼)·상품 지정 수집은 신선도 우선으로 항상 매일 수집
+  const applyLowFreqGate = !isManual && !(productIds && productIds.length > 0);
   const supabase = createServiceClient();
   const results: CollectResult[] = [];
   const errors: string[] = [];
@@ -334,30 +376,50 @@ export async function collectAll(
   // 카운트로 이기는 경우가 있어, tie 상황에서는 묶음(고가) 쪽으로 편향시킨다.
   const baselineProductIds = filteredProducts.map((p) => p.id);
   const baselineMap = new Map<string, number>(); // key: "productId:channel" → dominantPrice
+  // 저빈도 차등 판정용 이력 — baseline 조회를 재활용해 별도 조회 없이 같은 결과로 구성한다.
+  const historyMap = new Map<string, { prices: number[]; times: number[] }>(); // key: "productId:channel"
   let failureBackoffMap = new Map<string, FailureBackoff>();
   try {
-    const sevenDaysAgo = new Date(Date.now() - 7 * DAY_MS).toISOString();
+    const nowMs = Date.now();
+    // 조회는 15일로 넓혀 저빈도 판정 이력을 확보하되, baseline은 아래에서 7일 경계로 다시 걸러 기존 동작을 보존한다.
+    const lookbackAgo = new Date(nowMs - DIFF_HISTORY_LOOKBACK_DAYS * DAY_MS).toISOString();
+    const baselineCutoffMs = nowMs - 7 * DAY_MS;
     // 활성 상품이 많으면 .in(전체)가 URL 길이 한도를 넘어 baseline 조회가 통째로 실패한다 → 청크 분할.
     const recentLogs = await selectByIdChunks<{
       product_id: string;
       channel: Channel;
       price: number;
+      collected_at: string;
     }>(baselineProductIds, (ids, from, to) =>
       supabase
         .from('price_logs')
-        .select('product_id, channel, price')
+        .select('product_id, channel, price, collected_at')
         .in('product_id', ids)
         .eq('is_suspicious', false)
-        .gte('collected_at', sevenDaysAgo)
+        .gte('collected_at', lookbackAgo)
         .order('collected_at', { ascending: false })
         .range(from, to)
     );
     const grouped = new Map<string, number[]>();
     for (const log of recentLogs) {
       const key = `${log.product_id}:${log.channel}`;
-      const arr = grouped.get(key);
-      if (arr) arr.push(log.price as number);
-      else grouped.set(key, [log.price as number]);
+      const price = log.price as number;
+      const t = new Date(log.collected_at).getTime();
+      if (!Number.isFinite(t)) continue;
+      // baseline(dominantPrice)은 기존과 동일하게 최근 7일 값만 사용
+      if (t >= baselineCutoffMs) {
+        const arr = grouped.get(key);
+        if (arr) arr.push(price);
+        else grouped.set(key, [price]);
+      }
+      // 저빈도 판정은 조회 범위(15일) 전체를 사용
+      const entry = historyMap.get(key);
+      if (entry) {
+        entry.prices.push(price);
+        entry.times.push(t);
+      } else {
+        historyMap.set(key, { prices: [price], times: [t] });
+      }
     }
     for (const [key, prices] of grouped) {
       const dominant = computeDominantPrice(prices);
@@ -409,12 +471,30 @@ export async function collectAll(
     });
   };
 
+  // 저빈도 차등으로 이번 실행에서 skip한 채널 호출 수 (병렬 워커 공유 카운터, 단순 증가라 락 불필요)
+  let lowFreqSkipCount = 0;
+
   const processProduct = async (product: Product): Promise<void> => {
     // 이 상품 분만 누적 — 3채널이 끝나면 즉시 DB에 기록한다.
     const productPriceRows: PriceRow[] = [];
     const productErrorRows: ErrorRow[] = [];
     // URL이 존재하는 채널만 수집 task를 만든다. URL 없는 채널은 Bright Data 호출 대상이 아니다.
-    const activeChannels = channels.filter((channel) => !!getChannelUrl(product, channel));
+    let activeChannels = channels.filter((channel) => !!getChannelUrl(product, channel));
+    // 크론 전역 수집에서만: 오래 무변동인 (상품×채널)을 저빈도 주기로 낮춰 Bright Data 호출 자체를 아낀다.
+    if (applyLowFreqGate) {
+      const now = Date.now();
+      activeChannels = activeChannels.filter((channel) => {
+        const history = historyMap.get(`${product.id}:${channel}`);
+        if (!history || !shouldSkipByLowFreq(history, now)) return true;
+        lowFreqSkipCount++;
+        const daysSinceLast = ((now - Math.max(...history.times)) / DAY_MS).toFixed(1);
+        console.log(
+          `[collectAll] 저빈도 차등 skip [${channel}] ${product.name}: ` +
+            `${STABLE_WINDOW_DAYS}일 무변동, 마지막 수집 ${daysSinceLast}d 전`
+        );
+        return false;
+      });
+    }
     // 한 상품의 채널들은 서로 다른 호스트이므로 동시에 호출
     const channelTasks = activeChannels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
@@ -598,6 +678,16 @@ export async function collectAll(
 
   const success = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
+
+  if (applyLowFreqGate) {
+    const totalChannelCalls = filteredProducts.reduce(
+      (sum, p) => sum + channels.filter((c) => !!getChannelUrl(p, c)).length,
+      0
+    );
+    console.log(
+      `[collectAll] 저빈도 차등으로 채널 호출 ${lowFreqSkipCount}개 절감 (원래 ${totalChannelCalls}개 중)`
+    );
+  }
 
   return { success, failed, errors };
 }
