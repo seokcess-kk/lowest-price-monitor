@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "collect": "tsx --env-file=.env.local scripts/collect.ts",
-    "collect:ci": "tsx scripts/collect.ts"
+    "collect:ci": "tsx scripts/collect.ts",
+    "usage-report": "tsx --env-file=.env.local scripts/usage-report.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
