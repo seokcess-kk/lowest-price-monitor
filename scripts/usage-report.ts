@@ -21,11 +21,28 @@ type Ch = (typeof channels)[number];
 
 const sb = createServiceClient();
 
-async function fetchAll<T>(table: string, cols: string, apply: (q: any) => any): Promise<T[]> {
+// supabase 쿼리 빌더 제네릭이 복잡해 최소 shape으로만 제약
+interface QueryLike {
+  gte: (col: string, v: string) => QueryLike;
+  eq: (col: string, v: string | number | boolean) => QueryLike;
+  order: (col: string, opts: { ascending: boolean }) => QueryLike;
+  range: (
+    from: number,
+    to: number
+  ) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>;
+}
+
+async function fetchAll<T>(
+  table: string,
+  cols: string,
+  apply: (q: QueryLike) => QueryLike
+): Promise<T[]> {
   const out: T[] = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await apply(sb.from(table).select(cols)).range(from, from + PAGE - 1);
+    const { data, error } = await apply(
+      sb.from(table).select(cols) as unknown as QueryLike
+    ).range(from, from + PAGE - 1);
     if (error) throw new Error(error.message);
     const batch = (data ?? []) as T[];
     out.push(...batch);
@@ -93,7 +110,7 @@ async function officialCost(): Promise<void> {
       `https://api.brightdata.com/domains/req?from=${from}&to=${to}&zones=${encodeURIComponent(zone)}`,
       { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) }
     );
-    const raw = (await res.json()) as Record<string, any>;
+    const raw = (await res.json()) as Record<string, unknown>;
     const perCh = new Map<Ch, number>();
     let grand = 0;
     const toChannel = (domain: string): Ch | null =>
@@ -105,7 +122,7 @@ async function officialCost(): Promise<void> {
             ? 'naver'
             : null;
     for (const zoneObj of Object.values(raw)) {
-      for (const dateObj of Object.values(zoneObj as Record<string, any>)) {
+      for (const dateObj of Object.values((zoneObj ?? {}) as Record<string, unknown>)) {
         for (const [domain, cnt] of Object.entries(dateObj as Record<string, number>)) {
           const ch = toChannel(domain);
           if (!ch) continue;

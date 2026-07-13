@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { useProducts } from '@/hooks/useProducts';
+import { useProductList } from '@/hooks/useProductList';
 import {
   useUrlState,
   stringCodec,
@@ -18,7 +18,13 @@ import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import ActiveFilterChips from '@/components/ActiveFilterChips';
 import { ProductRowSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
-import type { Product, CreateProductInput, Channel } from '@/types/database';
+import type {
+  Product,
+  Brand,
+  CreateProductInput,
+  Channel,
+  ProductIdsResponse,
+} from '@/types/database';
 
 // xlsx-js-style을 포함한 무거운 모달은 사용자가 "Excel 일괄 등록" 버튼을 눌러
 // open=true가 될 때까지 코드 다운로드를 미룬다.
@@ -36,6 +42,16 @@ const OPS_CODEC = enumCodec<OpsPreset>(
   ['none', 'noUrl', 'partialUrl', 'noBrand'],
   'none'
 );
+// 페이지 번호 URL 동기화 — 1이 기본이라 1일 땐 query에서 제거
+const PAGE_CODEC = {
+  parse: (raw: string | null) => {
+    const n = raw ? parseInt(raw, 10) : 1;
+    return Number.isFinite(n) && n >= 1 ? n : 1;
+  },
+  format: (v: number) => (v <= 1 ? null : String(v)),
+};
+
+const PAGE_SIZE = 50;
 
 const CHANNEL_COLORS: Record<Channel, string> = {
   coupang: '#E44232',
@@ -55,24 +71,72 @@ export default function ManageProductsPage() {
   const toast = useToast();
   const searchParams = useSearchParams();
   const focusId = searchParams.get('id');
-  const { products, loading, error, refetch } = useProducts(false);
 
-  const [search, setSearch] = useUrlState('q', '', stringCodec);
-  const [statusFilter, setStatusFilter] = useUrlState<StatusFilter>(
+  const [search, setSearchRaw] = useUrlState('q', '', stringCodec);
+  const [statusFilter, setStatusFilterRaw] = useUrlState<StatusFilter>(
     'status',
     'all',
     STATUS_CODEC
   );
-  const [opsPreset, setOpsPreset] = useUrlState<OpsPreset>('ops', 'none', OPS_CODEC);
-  const [brandSelection, setBrandSelection] = useUrlState(
+  const [opsPreset, setOpsPresetRaw] = useUrlState<OpsPreset>('ops', 'none', OPS_CODEC);
+  const [brandSelection, setBrandSelectionRaw] = useUrlState(
     'brand',
     new Set<string>(),
     stringSetCodec
   );
+  const [page, setPage] = useUrlState('page', 1, PAGE_CODEC);
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // 필터가 바뀌면 1페이지로 리셋 — 기존 페이지 번호를 유지하면 빈 페이지가 보인다
+  const setSearch = (next: string | ((prev: string) => string)) => {
+    setSearchRaw(next);
+    setPage(1);
+  };
+  const setStatusFilter = (next: StatusFilter) => {
+    setStatusFilterRaw(next);
+    setPage(1);
+  };
+  const setOpsPreset = (next: OpsPreset) => {
+    setOpsPresetRaw(next);
+    setPage(1);
+  };
+  const setBrandSelection = (
+    next: Set<string> | ((prev: Set<string>) => Set<string>)
+  ) => {
+    setBrandSelectionRaw(next);
+    setPage(1);
+  };
+
+  const brandIdsArr = useMemo(() => [...brandSelection].sort(), [brandSelection]);
+  const { items, total, facets, loading, error, refetch } = useProductList({
+    page,
+    pageSize: PAGE_SIZE,
+    q: search,
+    status: statusFilter,
+    brandIds: brandIdsArr,
+    ops: opsPreset,
+    sort: sortKey,
+    dir: sortDir,
+    includeFacets: true,
+  });
+
+  // 브랜드 이름 매핑 (필터 칩 라벨·BrandFilter 목록) — 목록이 페이지 단위라 별도 조회
+  const [brands, setBrands] = useState<Brand[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/brands')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) setBrands(data as Brand[]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -83,15 +147,38 @@ export default function ManageProductsPage() {
   } | null>(null);
   const [actionMenu, setActionMenu] = useState<string | null>(null);
 
-  // 채널 URL 충족 채널 수 (0~3)
-  const urlCount = (p: Product) =>
-    (p.coupang_url ? 1 : 0) + (p.naver_url ? 1 : 0) + (p.danawa_url ? 1 : 0);
+  // 상품 상세 → '상품 관리' 진입 시 해당 상품만 보여주는 포커스 모드 (단건 조회)
+  const [focusedProduct, setFocusedProduct] = useState<Product | null>(null);
+  const [focusLoading, setFocusLoading] = useState(false);
+  const [focusVersion, setFocusVersion] = useState(0);
+  useEffect(() => {
+    if (!focusId) {
+      setFocusedProduct(null);
+      return;
+    }
+    let cancelled = false;
+    setFocusLoading(true);
+    fetch(`/api/products/${focusId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled) setFocusedProduct((data as Product | null) ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setFocusedProduct(null);
+      })
+      .finally(() => {
+        if (!cancelled) setFocusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusId, focusVersion]);
 
-  // 상품 상세 → '상품 관리' 진입 시 해당 상품만 보여주는 포커스 모드
-  const focusedProduct = useMemo(
-    () => (focusId ? products.find((p) => p.id === focusId) ?? null : null),
-    [products, focusId]
-  );
+  // 뮤테이션 후 목록 + (포커스 모드면) 단건도 함께 갱신
+  const refetchAll = () => {
+    refetch();
+    if (focusId) setFocusVersion((v) => v + 1);
+  };
 
   // URL ?id= 로 진입하면 해당 행을 1회 펼친다. effect 대신 렌더 중 보정 패턴 —
   // 이전 focusId를 기억해 focusId가 바뀔 때만 seeding하고, 이후 사용자 토글은 자유.
@@ -101,78 +188,17 @@ export default function ManageProductsPage() {
     setExpanded((prev) => new Set([...prev, focusId]));
   }
 
-  // 검색 + 필터 + 정렬 (focusId가 있으면 그 상품만)
-  const filtered = useMemo(() => {
-    if (focusId) {
-      return focusedProduct ? [focusedProduct] : [];
-    }
-    const q = search.trim().toLowerCase();
-    const list = products.filter((p) => {
-      if (q) {
-        const nameHit = p.name.toLowerCase().includes(q);
-        const codeHit = (p.sabangnet_code ?? '').toLowerCase().includes(q);
-        const brandHit = (p.brand_name ?? '').toLowerCase().includes(q);
-        if (!nameHit && !codeHit && !brandHit) return false;
-      }
-      if (statusFilter === 'active' && !p.is_active) return false;
-      if (statusFilter === 'inactive' && p.is_active) return false;
-      if (brandSelection.size > 0) {
-        if (p.brand_id) {
-          if (!brandSelection.has(p.brand_id)) return false;
-        } else if (!brandSelection.has(UNCATEGORIZED_BRAND_ID)) return false;
-      }
-      if (opsPreset === 'noUrl' && urlCount(p) !== 0) return false;
-      if (opsPreset === 'partialUrl') {
-        const c = urlCount(p);
-        if (c === 0 || c === 3) return false;
-      }
-      if (opsPreset === 'noBrand' && p.brand_id) return false;
-      return true;
-    });
-    list.sort((a, b) => {
-      let cmp = 0;
-      if (sortKey === 'name') cmp = a.name.localeCompare(b.name);
-      else if (sortKey === 'created')
-        cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      else if (sortKey === 'status')
-        cmp = Number(a.is_active) - Number(b.is_active);
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return list;
-  }, [products, search, statusFilter, brandSelection, opsPreset, sortKey, sortDir, focusId, focusedProduct]);
+  // 검색/필터/정렬/페이지는 전부 서버에서 처리 — 여기서는 표시할 목록만 결정
+  const displayItems = focusId ? (focusedProduct ? [focusedProduct] : []) : items;
+  const listLoading = focusId ? focusLoading : loading;
 
-  // 운영 프리셋 카운트 (다른 필터 무시한 절대값 — 클릭 의사결정용)
-  const opsCounts = useMemo(() => {
-    let noUrl = 0;
-    let partialUrl = 0;
-    let noBrand = 0;
-    for (const p of products) {
-      const c = urlCount(p);
-      if (c === 0) noUrl++;
-      else if (c < 3) partialUrl++;
-      if (!p.brand_id) noBrand++;
-    }
-    return { noUrl, partialUrl, noBrand };
-  }, [products]);
-
-  const counts = useMemo(
-    () => ({
-      all: products.length,
-      active: products.filter((p) => p.is_active).length,
-      inactive: products.filter((p) => !p.is_active).length,
-    }),
-    [products]
-  );
-
-  const brandCounts = useMemo(() => {
-    const map: Record<string, number> = {};
-    let uncategorized = 0;
-    for (const p of products) {
-      if (p.brand_id) map[p.brand_id] = (map[p.brand_id] ?? 0) + 1;
-      else uncategorized++;
-    }
-    return { byId: map, uncategorized };
-  }, [products]);
+  // 절대값 카운트 (필터와 무관) — products_facets RPC 결과
+  const counts = facets?.status ?? { all: total, active: 0, inactive: 0 };
+  const opsCounts = facets?.ops ?? { noUrl: 0, partialUrl: 0, noBrand: 0 };
+  const brandCounts = {
+    byId: facets?.brands ?? {},
+    uncategorized: facets?.uncategorized ?? 0,
+  };
 
   // 적용된 필터 요약
   const activeChips = useMemo(() => {
@@ -206,12 +232,7 @@ export default function ManageProductsPage() {
       });
     }
     if (brandSelection.size > 0) {
-      const idToName = new Map<string, string>();
-      for (const p of products) {
-        if (p.brand_id && p.brand_name && !idToName.has(p.brand_id)) {
-          idToName.set(p.brand_id, p.brand_name);
-        }
-      }
+      const idToName = new Map(brands.map((b) => [b.id, b.name]));
       for (const id of brandSelection) {
         const name = id === UNCATEGORIZED_BRAND_ID ? '미분류' : idToName.get(id) ?? '브랜드';
         items.push({
@@ -227,17 +248,9 @@ export default function ManageProductsPage() {
       }
     }
     return items;
-  }, [
-    search,
-    statusFilter,
-    brandSelection,
-    opsPreset,
-    products,
-    setSearch,
-    setStatusFilter,
-    setBrandSelection,
-    setOpsPreset,
-  ]);
+    // setter들은 useUrlState의 안정 참조 + setPage 조합이라 deps 불필요
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, statusFilter, brandSelection, opsPreset, brands]);
 
   const clearAllFilters = () => {
     setSearch('');
@@ -247,21 +260,46 @@ export default function ManageProductsPage() {
   };
 
   const allVisibleSelected =
-    filtered.length > 0 && filtered.every((p) => selected.has(p.id));
+    displayItems.length > 0 && displayItems.every((p) => selected.has(p.id));
 
+  // 헤더 체크박스는 "현재 페이지"만 선택/해제 — 선택 Set은 페이지 이동에도 유지된다
   const toggleSelectAll = () => {
     if (allVisibleSelected) {
       setSelected((prev) => {
         const next = new Set(prev);
-        filtered.forEach((p) => next.delete(p.id));
+        displayItems.forEach((p) => next.delete(p.id));
         return next;
       });
     } else {
       setSelected((prev) => {
         const next = new Set(prev);
-        filtered.forEach((p) => next.add(p.id));
+        displayItems.forEach((p) => next.add(p.id));
         return next;
       });
+    }
+  };
+
+  // 필터 결과 전체(모든 페이지) 선택 — 서버에서 id만 받아온다
+  const [selectingAll, setSelectingAll] = useState(false);
+  const selectAllFiltered = async () => {
+    setSelectingAll(true);
+    try {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('q', search.trim());
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (brandIdsArr.length > 0) params.set('brand_ids', brandIdsArr.join(','));
+      if (opsPreset !== 'none') params.set('ops', opsPreset);
+      const res = await fetch(`/api/products/ids?${params.toString()}`);
+      if (!res.ok) {
+        toast.error('필터 결과 전체 선택 실패');
+        return;
+      }
+      const body = (await res.json()) as ProductIdsResponse;
+      setSelected(new Set(body.ids));
+    } catch {
+      toast.error('필터 결과 전체 선택 실패');
+    } finally {
+      setSelectingAll(false);
     }
   };
 
@@ -281,6 +319,7 @@ export default function ManageProductsPage() {
       setSortKey(key);
       setSortDir(key === 'name' ? 'asc' : 'desc');
     }
+    setPage(1);
   };
 
   const toggleExpand = (id: string) => {
@@ -306,7 +345,7 @@ export default function ManageProductsPage() {
     const created: Product = await res.json();
     toast.success(`"${data.name}" 등록 완료 — 가격 검증 시작`);
     setFormOpen(false);
-    refetch();
+    refetchAll();
 
     // 등록 후 즉시 1회 가격 수집을 트리거해 URL 유효성을 실측 검증.
     // fire-and-forget — 폼은 닫히고 결과는 toast로 전달 (60초 내외 소요).
@@ -354,7 +393,7 @@ export default function ManageProductsPage() {
     toast.success(`"${data.name}" 수정 완료`);
     setEditingProduct(null);
     setFormOpen(false);
-    refetch();
+    refetchAll();
   };
 
   const handleToggleActive = async (id: string) => {
@@ -364,7 +403,7 @@ export default function ManageProductsPage() {
       toast.error('활성 상태 전환 실패');
       return;
     }
-    refetch();
+    refetchAll();
   };
 
   const handleDelete = async (ids: string[]) => {
@@ -388,7 +427,7 @@ export default function ManageProductsPage() {
     toast.success(`${ids.length}개 상품 삭제됨`);
     setConfirmDelete(null);
     setSelected(new Set());
-    refetch();
+    refetchAll();
   };
 
   const handleBulkAction = async (action: 'activate' | 'deactivate') => {
@@ -407,7 +446,7 @@ export default function ManageProductsPage() {
       `${ids.length}개 상품 ${action === 'activate' ? '활성화' : '비활성화'}됨`
     );
     setSelected(new Set());
-    refetch();
+    refetchAll();
   };
 
   const openEditModal = (product: Product) => {
@@ -526,9 +565,30 @@ export default function ManageProductsPage() {
         <ActiveFilterChips
           items={activeChips}
           onClearAll={activeChips.length > 0 ? clearAllFilters : undefined}
-          matchedCount={filtered.length}
-          totalCount={products.length}
+          matchedCount={total}
+          totalCount={counts.all}
         />
+      )}
+
+      {/* 필터 결과가 여러 페이지일 때 전체 선택 진입점 */}
+      {!focusId && total > displayItems.length && (
+        <div className="mb-3 flex items-center gap-2 text-sm">
+          <button
+            type="button"
+            onClick={selectAllFiltered}
+            disabled={selectingAll}
+            className="px-2 py-1 text-blue-600 hover:underline disabled:opacity-50"
+          >
+            {selectingAll
+              ? '선택 중...'
+              : `필터 결과 ${total.toLocaleString('ko-KR')}개 모두 선택`}
+          </button>
+          {selected.size > 0 && (
+            <span className="text-gray-500">
+              (현재 {selected.size.toLocaleString('ko-KR')}개 선택됨)
+            </span>
+          )}
+        </div>
       )}
 
       {/* 일괄 작업 바 — 데스크톱: 인라인, 모바일: sticky bottom */}
@@ -573,7 +633,7 @@ export default function ManageProductsPage() {
 
       {/* 목록 — 모바일 카드 리스트 */}
       <div className="md:hidden mb-20">
-        {loading && (
+        {listLoading && (
           <div className="space-y-2">
             {Array.from({ length: 5 }).map((_, i) => (
               <ProductRowSkeleton key={i} />
@@ -583,16 +643,16 @@ export default function ManageProductsPage() {
         {error && (
           <div className="text-center py-12 text-red-500">오류: {error}</div>
         )}
-        {!loading && !error && filtered.length === 0 && (
+        {!listLoading && !error && displayItems.length === 0 && (
           <div className="bg-white rounded-lg border border-gray-200 text-center py-12 text-gray-400">
-            {products.length === 0
+            {counts.all === 0
               ? '등록된 상품이 없습니다.'
               : '조건에 맞는 상품이 없습니다.'}
           </div>
         )}
-        {!loading && !error && filtered.length > 0 && (
+        {!listLoading && !error && displayItems.length > 0 && (
           <div className="space-y-2">
-            {filtered.map((product) => {
+            {displayItems.map((product) => {
               const isSelected = selected.has(product.id);
               const isExpanded = expanded.has(product.id);
               return (
@@ -620,7 +680,7 @@ export default function ManageProductsPage() {
 
       {/* 목록 — 데스크톱 테이블 */}
       <div className="hidden md:block bg-white rounded-lg shadow-sm border border-gray-200">
-        {loading && (
+        {listLoading && (
           <div className="p-4 space-y-2">
             {Array.from({ length: 6 }).map((_, i) => (
               <ProductRowSkeleton key={i} />
@@ -630,14 +690,14 @@ export default function ManageProductsPage() {
         {error && (
           <div className="text-center py-12 text-red-500">오류: {error}</div>
         )}
-        {!loading && !error && filtered.length === 0 && (
+        {!listLoading && !error && displayItems.length === 0 && (
           <div className="text-center py-12 text-gray-400">
-            {products.length === 0
+            {counts.all === 0
               ? '등록된 상품이 없습니다.'
               : '조건에 맞는 상품이 없습니다.'}
           </div>
         )}
-        {!loading && !error && filtered.length > 0 && (
+        {!listLoading && !error && displayItems.length > 0 && (
           <table className="min-w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -677,7 +737,7 @@ export default function ManageProductsPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((product) => {
+              {displayItems.map((product) => {
                 const isExpanded = expanded.has(product.id);
                 const isSelected = selected.has(product.id);
                 return (
@@ -709,6 +769,34 @@ export default function ManageProductsPage() {
         )}
       </div>
 
+      {/* 페이지네이션 — 서버 페이지 단위 */}
+      {!focusId && !listLoading && !error && total > PAGE_SIZE && (
+        <div className="mt-4 mb-20 md:mb-4 flex items-center justify-center gap-3 text-sm">
+          <button
+            type="button"
+            onClick={() => setPage(Math.max(1, page - 1))}
+            disabled={page <= 1}
+            className="min-h-9 px-3 py-1.5 border border-gray-300 rounded bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ← 이전
+          </button>
+          <span className="text-gray-600 tabular-nums">
+            {page} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 페이지
+            <span className="ml-2 text-gray-400">
+              (총 {total.toLocaleString('ko-KR')}개)
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage(page + 1)}
+            disabled={page >= Math.ceil(total / PAGE_SIZE)}
+            className="min-h-9 px-3 py-1.5 border border-gray-300 rounded bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            다음 →
+          </button>
+        </div>
+      )}
+
       {/* 등록/수정 모달 */}
       <Modal
         open={formOpen}
@@ -728,7 +816,7 @@ export default function ManageProductsPage() {
       <CsvImportModal
         open={csvOpen}
         onClose={() => setCsvOpen(false)}
-        onImported={refetch}
+        onImported={refetchAll}
       />
 
       {/* 삭제 확인 모달 */}

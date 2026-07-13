@@ -1,9 +1,10 @@
 import type { Channel, Product, CollectResult } from '@/types/database';
 import { createServiceClient } from '@/lib/supabase';
 import { cleanupStaleRequests } from '@/lib/collect-cleanup';
+import { dateKeyKST, daysAgoKeyKST } from '@/lib/date-utils';
 import { delay } from './utils';
 import { flushUsage } from './brightdata';
-import { selectByIdChunks } from '@/lib/query-chunk';
+import { selectAllRange, selectByIdChunks } from '@/lib/query-chunk';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
 import { scrapeDanawa } from './channels/danawa';
@@ -31,10 +32,14 @@ const RESCAN_DELAY_MS = 5_000;
 /** dominantPrice 클러스터를 잡을 때 한 가격을 중심으로 하는 ±폭 (20%) */
 const CLUSTER_BAND = 0.2;
 /**
- * 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3).
+ * 상품 단위 동시 처리 개수. Bright Data zone 동시 호출은 PRODUCT_CONCURRENCY × 채널수(최대 3) × 샤드수.
  * 쿠팡 우회로 응답이 길어질 때 zone 큐잉으로 timeout이 누적되는 것을 막기 위해 보수적으로 2.
+ * 샤드 병렬화 후 zone 부하가 문제되면 재배포 없이 env로 하향할 수 있게 env 승격.
  */
-const PRODUCT_CONCURRENCY = 2;
+const PRODUCT_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.COLLECT_PRODUCT_CONCURRENCY || '2', 10) || 2
+);
 /** 연속 실패한 상품+채널은 Bright Data 호출 전에 잠시 쉬게 해 반복 과금을 막는다. */
 const FAILURE_BACKOFF_THRESHOLD = 3;
 const FAILURE_BACKOFF_LOOKBACK_DAYS = 30;
@@ -46,6 +51,19 @@ const STABLE_WINDOW_DAYS = 14;
 const LOW_FREQ_INTERVAL_DAYS = 3;
 /** 무변동 판정에 필요한 이력 조회 기간. STABLE_WINDOW_DAYS + 여유. */
 const DIFF_HISTORY_LOOKBACK_DAYS = 15;
+// --- 3단계 저빈도 등급제 (collection_tier_stats RPC 기반) ---
+// 마지막 가격 변동으로부터의 경과(안정 기간)에 따라 수집 주기를 차등한다.
+// RPC 미적용/실패 환경에서는 위의 기존 단일 등급(14일 무변동/3일 주기)으로 폴백.
+/** 안정 기간이 이 미만이면 HOT — 매일 수집 */
+const HOT_WINDOW_DAYS = 7;
+/** 안정 기간이 이 이상이면 COLD — 주 1회 수집. HOT~COLD 사이는 WARM */
+const COLD_WINDOW_DAYS = 30;
+const WARM_INTERVAL_DAYS = 2;
+const COLD_INTERVAL_DAYS = 7;
+/** cron 지터로 수집 시각이 흔들려도 주기가 밀리지 않도록 하는 마진(일) */
+const INTERVAL_MARGIN_DAYS = 0.5;
+/** 등급 판정 이력 조회 기간 = COLD 판정 창(30일) + COLD 주기(7일) 마진 */
+const TIER_LOOKBACK_DAYS = 37;
 
 interface FailureBackoff {
   consecutiveFailures: number;
@@ -106,6 +124,20 @@ function productChannelKey(productId: string, channel: Channel): string {
   return `${productId}:${channel}`;
 }
 
+/**
+ * FNV-1a 32bit — 샤드 분배용 결정적 해시.
+ * hash(product.id) % shardTotal 로 나누면 DB 정렬/offset과 무관하게
+ * 상품 추가·삭제 시에도 기존 상품의 샤드가 바뀌지 않는다.
+ */
+export function fnv1a32(str: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
 function backoffDays(consecutiveFailures: number): number {
   return Math.min(
     FAILURE_BACKOFF_MAX_DAYS,
@@ -145,6 +177,74 @@ function shouldSkipByLowFreq(
   const lastCollectedAt = Math.max(...history.times);
   const daysSinceLast = (now - lastCollectedAt) / DAY_MS;
   return daysSinceLast < LOW_FREQ_INTERVAL_DAYS - 0.5;
+}
+
+type Tier = 'hot' | 'warm' | 'cold';
+
+/** collection_tier_stats RPC의 (상품×채널) 1행 */
+interface TierStat {
+  product_id: string;
+  channel: Channel;
+  last_collected_at: string | null;
+  last_change_at: string | null;
+  first_normal_at: string | null;
+  normal_samples: number;
+}
+
+interface TierDecision {
+  skip: boolean;
+  tier: Tier;
+  daysSinceLast?: number;
+}
+
+/**
+ * 3단계 등급 판정.
+ * 안정 기간 = now − (마지막 가격 변동 시각 ?? 첫 정상 수집 시각).
+ *   < 7일  → HOT: 매일 수집
+ *   7~30일 → WARM: 2일 1회
+ *   ≥ 30일 → COLD: 주 1회
+ * 판정 근거가 부족하면(HOT 폴백) 절감보다 신선도 우선.
+ * COLD 상품도 주기 수집에서 변동이 잡히면 last_change_at이 갱신돼 다음 실행에서 즉시 HOT 승격.
+ *
+ * intervalScale: 예산 soft cap 초과 시 주기를 일괄 늘리는 배수 (기본 1).
+ */
+export function decideTier(
+  stat: TierStat | undefined,
+  nowMs: number,
+  intervalScale: number = 1
+): TierDecision {
+  if (!stat || stat.normal_samples < 2) return { skip: false, tier: 'hot' };
+
+  const anchorIso = stat.last_change_at ?? stat.first_normal_at;
+  if (!anchorIso) return { skip: false, tier: 'hot' };
+  const anchorMs = Date.parse(anchorIso);
+  if (!Number.isFinite(anchorMs)) return { skip: false, tier: 'hot' };
+
+  const stabilityDays = (nowMs - anchorMs) / DAY_MS;
+  let tier: Tier;
+  let intervalDays: number;
+  if (stabilityDays < HOT_WINDOW_DAYS) {
+    tier = 'hot';
+    intervalDays = 1;
+  } else if (stabilityDays < COLD_WINDOW_DAYS) {
+    tier = 'warm';
+    intervalDays = WARM_INTERVAL_DAYS;
+  } else {
+    tier = 'cold';
+    intervalDays = COLD_INTERVAL_DAYS;
+  }
+  intervalDays *= intervalScale;
+  // 스케일 1의 HOT은 매일 = 게이트 없음
+  if (intervalDays <= 1) return { skip: false, tier };
+
+  const lastMs = stat.last_collected_at ? Date.parse(stat.last_collected_at) : NaN;
+  if (!Number.isFinite(lastMs)) return { skip: false, tier };
+  const daysSinceLast = (nowMs - lastMs) / DAY_MS;
+  return {
+    skip: daysSinceLast < intervalDays - INTERVAL_MARGIN_DAYS,
+    tier,
+    daysSinceLast,
+  };
 }
 
 async function getRecentFailureRows(
@@ -255,6 +355,9 @@ interface CollectSummary {
   success: number;
   failed: number;
   errors: string[];
+  /** soft deadline에 걸려 처리하지 못하고 남긴 상품 수 (0이면 정상 완주) */
+  unprocessed: number;
+  deadlineHit: boolean;
 }
 
 /**
@@ -271,11 +374,17 @@ export async function collectAll(
     isManual?: boolean;
     productIds?: string[];
     onProgress?: (done: number, total: number) => void | Promise<void>;
+    /** matrix 샤드 좌표 — fnv1a32(product.id) % total === index 인 상품만 담당 */
+    shard?: { index: number; total: number };
+    /** 이 시각(epoch ms)을 넘기면 새 상품을 집지 않고 정상 마무리 — GH 강제 kill 방지 */
+    deadlineMs?: number;
   }
 ): Promise<CollectSummary> {
   const isManual = options?.isManual ?? false;
   const productIds = options?.productIds;
   const onProgress = options?.onProgress;
+  const shard = options?.shard;
+  const deadlineMs = options?.deadlineMs;
   // 저빈도 차등은 크론 전역 수집에만 적용 — 즉시 수집(버튼)·상품 지정 수집은 신선도 우선으로 항상 매일 수집
   const applyLowFreqGate = !isManual && !(productIds && productIds.length > 0);
   const supabase = createServiceClient();
@@ -304,9 +413,19 @@ export async function collectAll(
     products = data;
   }
 
+  // 샤드 필터는 활성 상품 확정 직후 — 이후의 baseline/backoff/tier 조회가
+  // 전부 샤드 부분집합으로 줄어 5,000개 규모에서도 조회량이 커지지 않는다.
+  if (products && shard && shard.total > 1) {
+    const before = products.length;
+    products = products.filter((p) => fnv1a32(p.id) % shard.total === shard.index);
+    console.log(
+      `[collectAll] 샤드 ${shard.index + 1}/${shard.total}: 전체 ${before}개 중 ${products.length}개 담당`
+    );
+  }
+
   if (!products || products.length === 0) {
     console.log('수집할 활성 상품이 없습니다.');
-    return { success: 0, failed: 0, errors: [] };
+    return { success: 0, failed: 0, errors: [], unprocessed: 0, deadlineHit: false };
   }
 
   // 전역 실행(productIds 미지정)에서는 현재 개별 수집 진행 중인 상품을 제외
@@ -347,7 +466,7 @@ export async function collectAll(
 
   if (filteredProducts.length === 0) {
     console.log('수집할 상품이 없습니다 (모두 제외됨).');
-    return { success: 0, failed: 0, errors: [] };
+    return { success: 0, failed: 0, errors: [], unprocessed: 0, deadlineHit: false };
   }
 
   console.log(`활성 상품 ${filteredProducts.length}개 발견`);
@@ -439,6 +558,39 @@ export async function collectAll(
     console.warn('[collectAll] 실패 백오프 조회 실패 (백오프 생략):', e);
   }
 
+  // 3단계 등급 판정 통계 (크론 전역 수집에서만).
+  // RPC 결과도 PostgREST 행 상한(1,000)에 걸리므로 range 루프로 전량 수신 —
+  // 5,000상품이면 (상품×채널) 최대 1.5만 행이다.
+  // 실패하면 null 유지 → 기존 단일 등급(shouldSkipByLowFreq) 폴백.
+  let tierStatsMap: Map<string, TierStat> | null = null;
+  // 예산 soft cap 초과 시 prepare job이 degrade 모드를 내려보내 주기를 2배로 늘린다
+  const tierIntervalScale = process.env.COLLECT_BUDGET_MODE === 'degrade' ? 2 : 1;
+  if (applyLowFreqGate) {
+    try {
+      const tierRows = await selectAllRange<TierStat>((from, to) =>
+        supabase
+          .rpc('collection_tier_stats', {
+            p_product_ids: baselineProductIds,
+            p_lookback_days: TIER_LOOKBACK_DAYS,
+          })
+          .range(from, to)
+      );
+      tierStatsMap = new Map(
+        tierRows.map((row) => [productChannelKey(row.product_id, row.channel), row])
+      );
+      if (tierIntervalScale !== 1) {
+        console.log(
+          `[collectAll] 예산 degrade 모드 — 등급 주기 ×${tierIntervalScale} (HOT 2일/WARM 4일/COLD 14일)`
+        );
+      }
+    } catch (e) {
+      console.warn(
+        '[collectAll] collection_tier_stats RPC 실패 — 기존 저빈도 게이트로 폴백:',
+        e
+      );
+    }
+  }
+
   const isOutOfRange = (baseline: number | undefined, curr: number): boolean => {
     if (baseline === undefined || baseline <= 0 || curr <= 0) return false;
     return Math.abs(curr - baseline) / baseline >= SUSPICIOUS_THRESHOLD;
@@ -473,6 +625,7 @@ export async function collectAll(
 
   // 저빈도 차등으로 이번 실행에서 skip한 채널 호출 수 (병렬 워커 공유 카운터, 단순 증가라 락 불필요)
   let lowFreqSkipCount = 0;
+  const tierSkipCounts: Record<Tier, number> = { hot: 0, warm: 0, cold: 0 };
 
   const processProduct = async (product: Product): Promise<void> => {
     // 이 상품 분만 누적 — 3채널이 끝나면 즉시 DB에 기록한다.
@@ -484,7 +637,20 @@ export async function collectAll(
     if (applyLowFreqGate) {
       const now = Date.now();
       activeChannels = activeChannels.filter((channel) => {
-        const history = historyMap.get(`${product.id}:${channel}`);
+        const key = productChannelKey(product.id, channel);
+        if (tierStatsMap) {
+          // 3단계 등급제 (HOT 매일 / WARM 2일 / COLD 주 1회)
+          const decision = decideTier(tierStatsMap.get(key), now, tierIntervalScale);
+          if (!decision.skip) return true;
+          tierSkipCounts[decision.tier]++;
+          console.log(
+            `[collectAll] ${decision.tier.toUpperCase()} 저빈도 skip [${channel}] ${product.name}: ` +
+              `마지막 수집 ${decision.daysSinceLast?.toFixed(1)}d 전`
+          );
+          return false;
+        }
+        // 폴백: 기존 단일 등급 (14일 무변동 → 3일 주기)
+        const history = historyMap.get(key);
         if (!history || !shouldSkipByLowFreq(history, now)) return true;
         lowFreqSkipCount++;
         const daysSinceLast = ((now - Math.max(...history.times)) / DAY_MS).toFixed(1);
@@ -660,8 +826,15 @@ export async function collectAll(
   // 상품 단위 워커 풀 — 동시 PRODUCT_CONCURRENCY개 처리.
   // 한 상품 내 3채널 병렬 × 동시 상품 수 = Bright Data zone에 동시 in-flight 호출 상한.
   const queue = [...filteredProducts];
+  let deadlineHit = false;
   const worker = async (): Promise<void> => {
     while (true) {
+      // soft deadline: GH Actions 강제 kill 전에 새 상품을 그만 집고 정상 finalize —
+      // 상품 단위 즉시 insert 구조라 여기까지 끝난 상품은 이미 저장돼 있다.
+      if (deadlineMs && Date.now() >= deadlineMs) {
+        deadlineHit = true;
+        return;
+      }
       const product = queue.shift();
       if (!product) return;
       await processProduct(product);
@@ -672,9 +845,32 @@ export async function collectAll(
   // 마지막 progress 콜백까지 flush
   await progressChain;
 
+  const unprocessed = queue.length;
+  if (deadlineHit) {
+    console.warn(
+      `[collectAll] soft deadline 도달 — 미처리 상품 ${unprocessed}개는 다음 실행으로 이월`
+    );
+  }
+
   // price_logs / scrape_errors 는 상품 단위로 이미 저장됨.
   // 동시 처리 중 마지막 상품들의 사용량 버퍼에 남은 것이 있으면 최종 flush.
   await flushUsage();
+
+  // 이번 수집분을 일별 요약(price_daily)에 즉시 반영 — 대시보드/장기 차트의 원천.
+  // 어제~오늘 범위인 이유: KST 자정 직전 시작한 실행이 자정을 넘겨 끝나는 경우 커버.
+  // RPC 미적용 환경에서는 경고만 남기고 통과 (수집 자체는 영향 없음).
+  try {
+    const { error: refreshErr } = await supabase.rpc('refresh_price_daily', {
+      p_from: daysAgoKeyKST(1),
+      p_to: dateKeyKST(),
+      p_product_ids: filteredProducts.map((p) => p.id),
+    });
+    if (refreshErr) {
+      console.warn(`[collectAll] price_daily 갱신 skip: ${refreshErr.message}`);
+    }
+  } catch (e) {
+    console.warn('[collectAll] price_daily 갱신 예외:', e);
+  }
 
   const success = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
@@ -684,10 +880,18 @@ export async function collectAll(
       (sum, p) => sum + channels.filter((c) => !!getChannelUrl(p, c)).length,
       0
     );
-    console.log(
-      `[collectAll] 저빈도 차등으로 채널 호출 ${lowFreqSkipCount}개 절감 (원래 ${totalChannelCalls}개 중)`
-    );
+    if (tierStatsMap) {
+      const skipped = tierSkipCounts.warm + tierSkipCounts.cold;
+      console.log(
+        `[collectAll] 등급제 저빈도로 채널 호출 ${skipped}개 절감 ` +
+          `(WARM ${tierSkipCounts.warm}, COLD ${tierSkipCounts.cold} / 원래 ${totalChannelCalls}개 중)`
+      );
+    } else {
+      console.log(
+        `[collectAll] 저빈도 차등으로 채널 호출 ${lowFreqSkipCount}개 절감 (원래 ${totalChannelCalls}개 중)`
+      );
+    }
   }
 
-  return { success, failed, errors };
+  return { success, failed, errors, unprocessed, deadlineHit };
 }

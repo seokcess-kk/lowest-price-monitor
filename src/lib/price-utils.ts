@@ -1,4 +1,12 @@
-import type { ChannelPrice, PriceWithChange } from '@/types/database';
+import type {
+  ChannelPrice,
+  PanelEntry,
+  PanelGroups,
+  PriceWithChange,
+  SummaryStats,
+} from '@/types/database';
+
+export type { SummaryStats } from '@/types/database';
 
 /**
  * 변동률 계산 — 어제 가격이 없거나 0이면 null.
@@ -76,14 +84,6 @@ export function hasRise(item: PriceWithChange, thresholdPct = 1): boolean {
   return pct !== null && pct >= thresholdPct;
 }
 
-/** 전체 KPI 집계 */
-export interface SummaryStats {
-  totalProducts: number;
-  changedProducts: number;
-  averageChangePct: number | null;
-  failedChannels: number;
-}
-
 export function computeSummary(items: PriceWithChange[]): SummaryStats {
   const totalProducts = items.length;
   const changedProducts = items.filter(hasAnyChange).length;
@@ -100,4 +100,44 @@ export function computeSummary(items: PriceWithChange[]): SummaryStats {
   );
 
   return { totalProducts, changedProducts, averageChangePct, failedChannels };
+}
+
+/**
+ * ActionPanels 4-패널 그룹핑 — Top N + 전체 카운트.
+ * 원래 ActionPanels 컴포넌트 내부 useMemo였으나, 서버 페이지네이션 전환으로
+ * "전체 상품 기준" 집계를 서버(api/dashboard)가 계산해야 해서 공용 모듈로 이동.
+ */
+export function computePanelGroups(
+  items: PriceWithChange[],
+  topN: number = 5
+): PanelGroups {
+  const drops: PanelEntry[] = [];
+  const rises: PanelEntry[] = [];
+  const failed: PriceWithChange[] = [];
+  const missing: PriceWithChange[] = [];
+
+  for (const item of items) {
+    const pct = productChangePercent(item);
+    if (pct !== null && pct <= -1) drops.push({ item, pct });
+    if (pct !== null && pct >= 1) rises.push({ item, pct });
+    if (hasFailure(item)) failed.push(item);
+    if (hasMissing(item)) missing.push(item);
+  }
+
+  drops.sort((a, b) => a.pct - b.pct); // 가장 큰 하락 먼저 (음수 작은 값)
+  rises.sort((a, b) => b.pct - a.pct);
+  failed.sort((a, b) => (b.warnings?.length ?? 0) - (a.warnings?.length ?? 0));
+
+  return {
+    drops: drops.slice(0, topN),
+    rises: rises.slice(0, topN),
+    failed: failed.slice(0, topN),
+    missing: missing.slice(0, topN),
+    counts: {
+      drops: drops.length,
+      rises: rises.length,
+      failed: failed.length,
+      missing: missing.length,
+    },
+  };
 }

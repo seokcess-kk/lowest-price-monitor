@@ -14,6 +14,39 @@
 const DEFAULT_CHUNK_SIZE = 100;
 const PAGE_SIZE = 1000;
 
+/**
+ * id 청크 없이 range 페이지네이션만 도는 전량 조회.
+ * Supabase 기본 행 상한(max-rows=1000)을 넘는 테이블의 전수 조회용.
+ *
+ * build(from, to)는 반드시 결정적 정렬(.order(...))을 포함한 쿼리 빌더를 반환해야
+ * 페이지 경계에서 행이 중복/누락되지 않는다.
+ */
+export async function selectAllRange<T>(
+  build: (
+    from: number,
+    to: number
+  ) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const acc: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await build(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) break;
+    acc.push(...(data as T[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+  return acc;
+}
+
+/** 배열을 size개 단위로 분할 — 대량 .in() update/delete의 URL 길이 한도 대응용 */
+export function chunkArray<T>(arr: T[], size: number = DEFAULT_CHUNK_SIZE): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 export async function selectByIdChunks<T>(
   ids: string[],
   build: (

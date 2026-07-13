@@ -14,9 +14,23 @@ on:
         required: false
         type: string
 
+# 같은 레인의 중복 실행 방지. cancel-in-progress: false — 진행 중 수집을 죽이지 않고 큐잉
+concurrency:
+  group: collect-${{ github.event.inputs.product_id || github.event.inputs.request_id || 'global-cron' }}
+  cancel-in-progress: false
+
 jobs:
-  collect:
+  # 샤드 수 산정 + collect_requests row 확보 + 월 예산 가드 (scripts/prepare-collect.ts)
+  prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      request_id: ${{ steps.prep.outputs.request_id }}
+      trigger_source: ${{ steps.prep.outputs.trigger_source }}
+      shard_total: ${{ steps.prep.outputs.shard_total }}
+      shard_json: ${{ steps.prep.outputs.shard_json }}
+      skip: ${{ steps.prep.outputs.skip }}
+      budget_mode: ${{ steps.prep.outputs.budget_mode }}
 
     steps:
       - name: Checkout repository
@@ -31,7 +45,45 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run price collector
+      - name: Prepare shards & budget guard
+        id: prep
+        run: npx tsx scripts/prepare-collect.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRIGHTDATA_API_TOKEN: ${{ secrets.BRIGHTDATA_API_TOKEN }}
+          BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
+          COLLECT_REQUEST_ID: ${{ github.event.inputs.request_id }}
+          COLLECT_PRODUCT_ID: ${{ github.event.inputs.product_id }}
+
+  collect:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    # soft deadline(COLLECT_DEADLINE_MINUTES, 기본 315분)이 먼저 걸려 정상 마무리하고,
+    # 그래도 안 끝나면 여기서 강제 종료 (6h 기본 한도보다 명시적으로 짧게)
+    timeout-minutes: 345
+    strategy:
+      # 한 샤드 실패가 다른 샤드를 죽이지 않게
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.prepare.outputs.shard_json) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run price collector (shard ${{ matrix.shard }})
         run: npm run collect:ci
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
@@ -41,5 +93,9 @@ jobs:
           BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
-          COLLECT_REQUEST_ID: ${{ github.event.inputs.request_id }}
+          COLLECT_REQUEST_ID: ${{ needs.prepare.outputs.request_id }}
           COLLECT_PRODUCT_ID: ${{ github.event.inputs.product_id }}
+          COLLECT_TRIGGER_SOURCE: ${{ needs.prepare.outputs.trigger_source }}
+          COLLECT_BUDGET_MODE: ${{ needs.prepare.outputs.budget_mode }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ needs.prepare.outputs.shard_total }}

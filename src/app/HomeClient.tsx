@@ -17,17 +17,15 @@ import SearchInput from '@/components/SearchInput';
 import FilterChips, { type ChangeFilter } from '@/components/FilterChips';
 import BrandFilter, { UNCATEGORIZED_BRAND_ID } from '@/components/BrandFilter';
 import ViewToggle, { type ViewMode } from '@/components/ViewToggle';
-import {
-  hasAnyChange,
-  hasBigDrop,
-  hasFailure,
-  hasMissing,
-  hasDrop,
-  hasRise,
-} from '@/lib/price-utils';
 import { exportSnapshotToExcel } from '@/lib/export';
 import { DashboardSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
+import type {
+  Brand,
+  DashboardResponse,
+  ProductIdsResponse,
+} from '@/types/database';
+import { buildDashboardParams } from '@/hooks/useDashboard';
 
 // useUrlState용 안정 codec 참조 — 모듈 레벨로 빼두면 useEffect deps가 흔들리지 않음
 // drops/rises/missing 은 ActionPanels 카드 클릭으로 진입하는 숨은 필터 — codec에는 포함해 URL 양방향 동기화
@@ -36,6 +34,17 @@ const FILTER_CODEC = enumCodec<ChangeFilter>(
   'all'
 );
 const VIEW_CODEC = enumCodec<ViewMode>(['card', 'table'], 'card');
+const PAGE_CODEC = {
+  parse: (raw: string | null) => {
+    const n = raw ? parseInt(raw, 10) : 1;
+    return Number.isFinite(n) && n >= 1 ? n : 1;
+  },
+  format: (v: number) => (v <= 1 ? null : String(v)),
+};
+
+const PAGE_SIZE = 50;
+/** 배치 수집 API의 상한 (api/collect/batch MAX_BATCH와 동일) */
+const COLLECT_BATCH_MAX = 1000;
 
 interface CollectStatus {
   id?: string;
@@ -72,30 +81,82 @@ function formatRelative(iso: string | null): { relative: string; absolute: strin
 }
 
 export default function Home() {
-  const {
-    latest: data,
-    sparklines: sparklineMap,
-    lastCollectedAt,
-    loading,
-    error,
-    refetch: refetchDashboard,
-  } = useDashboard(7);
-  // 두 콜백 호출처를 그대로 두기 위해 분리된 함수명을 유지
-  const refetch = refetchDashboard;
-  const refetchLastCollected = refetchDashboard;
-
-  const [search, setSearch] = useUrlState('q', '', stringCodec);
-  const [filter, setFilter] = useUrlState<ChangeFilter>(
+  const [search, setSearchRaw] = useUrlState('q', '', stringCodec);
+  const [filter, setFilterRaw] = useUrlState<ChangeFilter>(
     'filter',
     'all',
     FILTER_CODEC
   );
-  const [brandSelection, setBrandSelection] = useUrlState(
+  const [brandSelection, setBrandSelectionRaw] = useUrlState(
     'brand',
     new Set<string>(),
     stringSetCodec
   );
   const [view, setView] = useUrlState<ViewMode>('view', 'card', VIEW_CODEC);
+  const [page, setPage] = useUrlState('page', 1, PAGE_CODEC);
+
+  // 필터가 바뀌면 1페이지로 리셋
+  const setSearch = useCallback(
+    (next: string) => {
+      setSearchRaw(next);
+      setPage(1);
+    },
+    [setSearchRaw, setPage]
+  );
+  const setFilter = useCallback(
+    (next: ChangeFilter) => {
+      setFilterRaw(next);
+      setPage(1);
+    },
+    [setFilterRaw, setPage]
+  );
+  const setBrandSelection = useCallback(
+    (next: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+      setBrandSelectionRaw(next);
+      setPage(1);
+    },
+    [setBrandSelectionRaw, setPage]
+  );
+
+  const brandIdsArr = useMemo(() => [...brandSelection].sort(), [brandSelection]);
+  const {
+    items,
+    sparklines: sparklineMap,
+    total,
+    summary,
+    filterCounts,
+    panel,
+    brandCounts,
+    lastCollectedAt,
+    loading,
+    error,
+    refetch: refetchDashboard,
+  } = useDashboard({
+    days: 7,
+    page,
+    pageSize: PAGE_SIZE,
+    q: search,
+    brandIds: brandIdsArr,
+    filter,
+  });
+  // 두 콜백 호출처를 그대로 두기 위해 분리된 함수명을 유지
+  const refetch = refetchDashboard;
+  const refetchLastCollected = refetchDashboard;
+
+  // 브랜드 이름 매핑 (필터 칩 라벨) — 목록이 페이지 단위라 별도 조회
+  const [brands, setBrands] = useState<Brand[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/brands')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) setBrands(data as Brand[]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [collecting, setCollecting] = useState(false);
   const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null);
@@ -279,74 +340,42 @@ export default function Home() {
     [isActive, collectingIds, toast, refetch, refetchLastCollected]
   );
 
-  // 검색·브랜드 매처를 useCallback으로 고정해 useMemo 의존성 정합 유지
-  const matchSearch = useCallback(
-    (item: (typeof data)[number], q: string) => {
-      if (!q) return true;
-      const nameHit = item.product_name.toLowerCase().includes(q);
-      const codeHit = (item.sabangnet_code ?? '').toLowerCase().includes(q);
-      const brandHit = (item.brand_name ?? '').toLowerCase().includes(q);
-      return nameHit || codeHit || brandHit;
-    },
-    []
-  );
-
-  const matchBrand = useCallback(
-    (item: (typeof data)[number]) => {
-      if (brandSelection.size === 0) return true;
-      if (item.brand_id) return brandSelection.has(item.brand_id);
-      return brandSelection.has(UNCATEGORIZED_BRAND_ID);
-    },
-    [brandSelection]
-  );
-
-  // 브랜드 필터용 카운트 (검색 적용 후 기준)
-  const brandCounts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const base = data.filter((item) => matchSearch(item, q));
-    const map: Record<string, number> = {};
-    let uncategorized = 0;
-    for (const item of base) {
-      if (item.brand_id) map[item.brand_id] = (map[item.brand_id] ?? 0) + 1;
-      else uncategorized++;
-    }
-    return { byId: map, uncategorized };
-  }, [data, search, matchSearch]);
-
-  // 검색 + 브랜드 + 필터 적용
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return data.filter((item) => {
-      if (!matchSearch(item, q)) return false;
-      if (!matchBrand(item)) return false;
-      if (filter === 'changed' && !hasAnyChange(item)) return false;
-      if (filter === 'bigDrop' && !hasBigDrop(item)) return false;
-      if (filter === 'failed' && !hasFailure(item)) return false;
-      if (filter === 'drops' && !hasDrop(item)) return false;
-      if (filter === 'rises' && !hasRise(item)) return false;
-      if (filter === 'missing' && !hasMissing(item)) return false;
-      return true;
-    });
-  }, [data, search, filter, matchSearch, matchBrand]);
-
   // 검색/변동필터/브랜드 중 하나라도 적용돼 부분집합을 보고 있는지
   const isFiltered =
     search.trim() !== '' || filter !== 'all' || brandSelection.size > 0;
 
-  // 현재 필터에 보이는 상품만 GitHub Actions로 일괄 수집
+  // 현재 필터 결과 "전체"(페이지 밖 포함)를 GitHub Actions로 일괄 수집.
+  // 페이지 슬라이스만 들고 있으므로 서버에 ids_only로 전체 id를 요청한다.
   const handleCollectFiltered = useCallback(async () => {
     if (isActive) {
       toast.error('수집이 진행 중입니다. 완료 후 다시 시도해주세요.');
       return;
     }
-    const ids = filtered.map((f) => f.product_id);
-    if (ids.length === 0) {
-      toast.show('수집할 상품이 없습니다.', 'info');
-      return;
-    }
     setCollecting(true);
     setCollectStatus(null);
     try {
+      const params = buildDashboardParams(
+        { page: 1, q: search, brandIds: brandIdsArr, filter },
+        search
+      );
+      params.set('ids_only', 'true');
+      const idsRes = await fetch(`/api/dashboard?${params.toString()}`);
+      if (!idsRes.ok) {
+        toast.error('필터 결과 조회 실패');
+        return;
+      }
+      const idsBody = (await idsRes.json()) as ProductIdsResponse;
+      const ids = idsBody.ids;
+      if (ids.length === 0) {
+        toast.show('수집할 상품이 없습니다.', 'info');
+        return;
+      }
+      if (ids.length > COLLECT_BATCH_MAX) {
+        toast.error(
+          `필터 결과가 ${ids.length.toLocaleString('ko-KR')}개로 배치 상한(${COLLECT_BATCH_MAX.toLocaleString('ko-KR')}개)을 넘습니다. 전체 수집(즉시 수집)을 사용하세요.`
+        );
+        return;
+      }
       const res = await fetch('/api/collect/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -373,19 +402,39 @@ export default function Home() {
     } finally {
       setCollecting(false);
     }
-  }, [isActive, filtered, toast, pollStatus]);
+  }, [isActive, search, brandIdsArr, filter, toast, pollStatus]);
 
-  // 필터 칩 카운트 (검색 + 브랜드 적용 후 기준)
-  const counts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const base = data.filter((item) => matchSearch(item, q) && matchBrand(item));
-    return {
-      all: base.length,
-      changed: base.filter(hasAnyChange).length,
-      bigDrop: base.filter((i) => hasBigDrop(i)).length,
-      failed: base.filter(hasFailure).length,
-    } as const;
-  }, [data, search, matchSearch, matchBrand]);
+  // 필터 칩 카운트 — 서버가 검색+브랜드 적용 후 전체 기준으로 계산
+  const counts = filterCounts ?? { all: 0, changed: 0, bigDrop: 0, failed: 0 };
+
+  // 엑셀 스냅샷 — 필터 결과 전체를 별도 요청 (페이지 슬라이스가 아닌 전량)
+  const [exporting, setExporting] = useState(false);
+  const handleExportSnapshot = useCallback(async () => {
+    if (total === 0) {
+      toast.show('내보낼 상품이 없습니다.', 'info');
+      return;
+    }
+    setExporting(true);
+    try {
+      const params = buildDashboardParams(
+        { page: 1, q: search, brandIds: brandIdsArr, filter },
+        search
+      );
+      params.set('all', 'true');
+      const res = await fetch(`/api/dashboard?${params.toString()}`);
+      if (!res.ok) {
+        toast.error('내보낼 데이터 조회 실패');
+        return;
+      }
+      const body = (await res.json()) as DashboardResponse;
+      const today = new Date().toISOString().split('T')[0];
+      await exportSnapshotToExcel(body.items, `현재최저가_${today}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '내보내기 실패');
+    } finally {
+      setExporting(false);
+    }
+  }, [total, search, brandIdsArr, filter, toast]);
 
   // 적용된 필터 칩 — 사용자가 무엇이 활성인지 즉시 인지하도록
   const activeChips = useMemo(() => {
@@ -417,12 +466,7 @@ export default function Home() {
       });
     }
     if (brandSelection.size > 0) {
-      const idToName = new Map<string, string>();
-      for (const item of data) {
-        if (item.brand_id && item.brand_name && !idToName.has(item.brand_id)) {
-          idToName.set(item.brand_id, item.brand_name);
-        }
-      }
+      const idToName = new Map(brands.map((b) => [b.id, b.name]));
       for (const id of brandSelection) {
         const name = id === UNCATEGORIZED_BRAND_ID ? '미분류' : idToName.get(id) ?? '브랜드';
         items.push({
@@ -443,7 +487,7 @@ export default function Home() {
     search,
     filter,
     brandSelection,
-    data,
+    brands,
     setSearch,
     setFilter,
     setBrandSelection,
@@ -481,18 +525,11 @@ export default function Home() {
             {collecting ? '요청 중...' : isActive ? '수집 중...' : '즉시 수집'}
           </button>
           <button
-            onClick={async () => {
-              if (filtered.length === 0) {
-                toast.show('내보낼 상품이 없습니다.', 'info');
-                return;
-              }
-              const today = new Date().toISOString().split('T')[0];
-              await exportSnapshotToExcel(filtered, `현재최저가_${today}`);
-            }}
-            disabled={filtered.length === 0}
+            onClick={handleExportSnapshot}
+            disabled={exporting || total === 0}
             className="flex-1 sm:flex-none min-h-9 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm"
           >
-            Excel 내보내기
+            {exporting ? '내보내는 중...' : 'Excel 내보내기'}
           </button>
         </div>
       </div>
@@ -533,21 +570,20 @@ export default function Home() {
 
       {error && <div className="text-center py-12 text-red-500">오류: {error}</div>}
 
-      {!loading && !error && data.length === 0 && (
+      {!loading && !error && !isFiltered && total === 0 && (
         <div className="text-center py-12 text-gray-400">
           등록된 상품이 없습니다. 상품 관리에서 상품을 추가해주세요.
         </div>
       )}
 
-      {!loading && !error && data.length > 0 && (
+      {!loading && !error && summary && panel && (isFiltered || total > 0) && (
         <>
-          <SummaryCards data={data} />
+          <SummaryCards stats={summary} />
 
           <ActionPanels
-            data={data}
-            onProductClick={(productId) => {
-              const item = data.find((d) => d.product_id === productId);
-              if (item) setSearch(item.product_name);
+            panel={panel}
+            onProductClick={(item) => {
+              setSearch(item.product_name);
             }}
             onSelectFilter={(next) => {
               setFilter(next);
@@ -582,27 +618,27 @@ export default function Home() {
           <ActiveFilterChips
             items={activeChips}
             onClearAll={activeChips.length > 0 ? clearAllFilters : undefined}
-            matchedCount={filtered.length}
-            totalCount={data.length}
+            matchedCount={total}
+            totalCount={counts.all}
           />
 
-          {isFiltered && filtered.length > 0 && (
+          {isFiltered && total > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleCollectFiltered}
                 disabled={collecting || isActive}
-                title="현재 필터에 보이는 상품만 GitHub Actions로 일괄 수집"
+                title="현재 필터 결과 전체(페이지 밖 포함)를 GitHub Actions로 일괄 수집"
                 className="inline-flex items-center gap-1.5 min-h-9 px-3 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 text-sm font-medium"
               >
                 {isActive
                   ? '수집 중...'
-                  : `필터된 ${filtered.length}개 수집`}
+                  : `필터된 ${total.toLocaleString('ko-KR')}개 수집`}
               </button>
             </div>
           )}
 
-          {filtered.length === 0 ? (
+          {items.length === 0 ? (
             <div className="bg-white rounded-lg shadow-sm border p-12 text-center text-gray-400">
               조건에 맞는 상품이 없습니다.
             </div>
@@ -611,7 +647,7 @@ export default function Home() {
               {/* 모바일은 항상 카드 뷰 */}
               <div className="md:hidden">
                 <PriceCardList
-                  data={filtered}
+                  data={items}
                   sparklineMap={sparklineMap}
                   collectingIds={collectingIds}
                   globalCollecting={isActive}
@@ -623,7 +659,7 @@ export default function Home() {
                 {view === 'table' ? (
                   <div className="bg-white rounded-lg shadow-sm border">
                     <PriceTable
-                      data={filtered}
+                      data={items}
                       sparklineMap={sparklineMap}
                       collectingIds={collectingIds}
                       globalCollecting={isActive}
@@ -632,14 +668,42 @@ export default function Home() {
                   </div>
                 ) : (
                   <PriceCardList
-                  data={filtered}
-                  sparklineMap={sparklineMap}
-                  collectingIds={collectingIds}
-                  globalCollecting={isActive}
-                  onCollectProduct={handleCollectProduct}
-                />
+                    data={items}
+                    sparklineMap={sparklineMap}
+                    collectingIds={collectingIds}
+                    globalCollecting={isActive}
+                    onCollectProduct={handleCollectProduct}
+                  />
                 )}
               </div>
+
+              {/* 페이지네이션 — 서버 페이지 단위 */}
+              {total > PAGE_SIZE && (
+                <div className="mt-4 flex items-center justify-center gap-3 text-sm">
+                  <button
+                    type="button"
+                    onClick={() => setPage(Math.max(1, page - 1))}
+                    disabled={page <= 1}
+                    className="min-h-9 px-3 py-1.5 border border-gray-300 rounded bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    ← 이전
+                  </button>
+                  <span className="text-gray-600 tabular-nums">
+                    {page} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 페이지
+                    <span className="ml-2 text-gray-400">
+                      (총 {total.toLocaleString('ko-KR')}개)
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage(page + 1)}
+                    disabled={page >= Math.ceil(total / PAGE_SIZE)}
+                    className="min-h-9 px-3 py-1.5 border border-gray-300 rounded bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    다음 →
+                  </button>
+                </div>
+              )}
             </>
           )}
         </>

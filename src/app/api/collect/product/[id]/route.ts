@@ -5,7 +5,7 @@ import { cleanupStaleRequests } from '@/lib/collect-cleanup';
 
 // Web Unlocker 1회 60초 + 재시도 + 3채널 직렬 가능성을 고려해 5분까지 확보.
 // Vercel Pro 이상에서만 실효. Hobby는 60초로 강제되니 운 나쁜 빈응답 누적 시
-// row가 running으로 박힐 수 있는데, cleanupStaleRequests가 5분 후 풀어준다.
+// row가 running으로 박힐 수 있는데, cleanupStaleRequests가 heartbeat 30분 초과 시 풀어준다.
 export const maxDuration = 300;
 
 /**

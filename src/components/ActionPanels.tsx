@@ -1,15 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
-import type { PriceWithChange, Channel } from '@/types/database';
-import { cheapestChannel, productChangePercent, hasFailure } from '@/lib/price-utils';
+import type { PanelGroups, PriceWithChange, Channel } from '@/types/database';
+import { cheapestChannel } from '@/lib/price-utils';
 import type { ChangeFilter } from '@/components/FilterChips';
 
 interface Props {
-  data: PriceWithChange[];
+  /** 서버(api/dashboard)가 전체 필터셋 기준으로 집계한 Top N + 카운트 */
+  panel: PanelGroups;
   /** 클릭 시 호출 (상품명으로 검색 적용 등). 미지정 시 단순 링크. */
-  onProductClick?: (productId: string) => void;
+  onProductClick?: (item: PriceWithChange) => void;
   /**
    * 패널 헤더 '전체 보기' 클릭 시 호출.
    * 메인 목록을 같은 조건으로 필터링하기 위해 HomeClient에서 setFilter로 연결.
@@ -33,46 +33,12 @@ const TOP_N = 5;
 
 /**
  * 운영자가 지금 무엇을 봐야 하는지 즉시 보이게 하는 액션 중심 4-패널.
- * KPI 요약과 상품 카드 사이에 들어간다. 모든 데이터는 latest 응답으로 충분.
+ * KPI 요약과 상품 카드 사이에 들어간다.
+ * 그룹핑은 서버(computePanelGroups)가 전체 필터셋 기준으로 계산해 내려준다 —
+ * 클라이언트는 페이지 슬라이스만 들고 있어 여기서 집계하면 값이 틀어진다.
  */
-export default function ActionPanels({ data, onProductClick, onSelectFilter }: Props) {
-  const groups = useMemo(() => {
-    const drops: Array<{ item: PriceWithChange; pct: number }> = [];
-    const rises: Array<{ item: PriceWithChange; pct: number }> = [];
-    const failed: PriceWithChange[] = [];
-    const missing: PriceWithChange[] = [];
-
-    for (const item of data) {
-      const pct = productChangePercent(item);
-      if (pct !== null && pct <= -1) drops.push({ item, pct });
-      if (pct !== null && pct >= 1) rises.push({ item, pct });
-      if (hasFailure(item)) failed.push(item);
-
-      const urlsAny =
-        !!item.urls.coupang || !!item.urls.naver || !!item.urls.danawa;
-      const noPrice = item.prices.every((p) => p.price <= 0);
-      if (!urlsAny || noPrice) missing.push(item);
-    }
-
-    drops.sort((a, b) => a.pct - b.pct); // 가장 큰 하락 먼저 (음수 작은 값)
-    rises.sort((a, b) => b.pct - a.pct);
-    failed.sort(
-      (a, b) => (b.warnings?.length ?? 0) - (a.warnings?.length ?? 0)
-    );
-
-    return {
-      drops: drops.slice(0, TOP_N),
-      rises: rises.slice(0, TOP_N),
-      failed: failed.slice(0, TOP_N),
-      missing: missing.slice(0, TOP_N),
-      counts: {
-        drops: drops.length,
-        rises: rises.length,
-        failed: failed.length,
-        missing: missing.length,
-      },
-    };
-  }, [data]);
+export default function ActionPanels({ panel, onProductClick, onSelectFilter }: Props) {
+  const groups = panel;
 
   const noActionable =
     groups.drops.length === 0 &&
@@ -267,7 +233,7 @@ function Panel({
 
 interface PanelRowProps {
   item: PriceWithChange;
-  onProductClick?: (productId: string) => void;
+  onProductClick?: (item: PriceWithChange) => void;
   right: React.ReactNode;
   warnChannels?: Channel[];
 }
@@ -311,7 +277,7 @@ function PanelRow({ item, onProductClick, right, warnChannels }: PanelRowProps) 
       {onProductClick ? (
         <button
           type="button"
-          onClick={() => onProductClick(item.product_id)}
+          onClick={() => onProductClick(item)}
           className="w-full text-left px-2 py-1.5 rounded hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           {inner}

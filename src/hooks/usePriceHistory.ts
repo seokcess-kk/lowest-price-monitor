@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { PriceLog } from '@/types/database';
+import type { PricePoint } from '@/types/database';
 
 interface UsePriceHistoryOptions {
   channel?: string;
@@ -16,9 +16,9 @@ interface UsePriceHistoryOptions {
 export function usePriceHistory(
   productId: string | null,
   options: UsePriceHistoryOptions = {},
-  initialData?: PriceLog[]
+  initialData?: PricePoint[]
 ) {
-  const [data, setData] = useState<PriceLog[]>(initialData ?? []);
+  const [data, setData] = useState<PricePoint[]>(initialData ?? []);
   const [loading, setLoading] = useState<boolean>(initialData ? false : true);
   const [error, setError] = useState<string | null>(null);
   // 서버에서 받은 초기 데이터가 있을 때 첫 effect 호출 1회만 스킵
@@ -41,7 +41,7 @@ export function usePriceHistory(
         const body = await res.json();
         throw new Error(body.error || '가격 이력을 불러오지 못했습니다.');
       }
-      const result: PriceLog[] = await res.json();
+      const result: PricePoint[] = await res.json();
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : '알 수 없는 오류');

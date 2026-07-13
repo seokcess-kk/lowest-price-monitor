@@ -1,5 +1,14 @@
 import { NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
+import {
+  estimateIncrementalCost,
+  estimateMonthlyCost,
+  fetchOfficialUsage,
+  getBrightdataPricing,
+  kstMonthBoundaries,
+  type OfficialUsage,
+} from '@/lib/brightdata-billing';
+import { dateKeyKST } from '@/lib/date-utils';
 
 interface UsageRow {
   channel: string;
@@ -44,133 +53,12 @@ function summarize(rows: UsageRow[]): BucketStats {
     failed: rows.length - success,
     bytes,
     avgDurationMs: Math.round(durationSum / rows.length),
-    estimatedCostUsd: estimateIncrementalCost(success),
+    estimatedCostUsd: estimateIncrementalCost(success, pricing),
   };
 }
 
-function readNumberEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
-const pricing = {
-  currency: 'USD',
-  billableMetric: 'successful_requests',
-  cpmUsd: readNumberEnv('BRIGHTDATA_WEB_UNLOCKER_CPM_USD', 1.5),
-  includedRequests: Math.round(
-    readNumberEnv('BRIGHTDATA_WEB_UNLOCKER_INCLUDED_REQUESTS', 0)
-  ),
-  monthlyCommitmentUsd: readNumberEnv(
-    'BRIGHTDATA_WEB_UNLOCKER_MONTHLY_COMMITMENT_USD',
-    0
-  ),
-};
-
-function estimateIncrementalCost(successfulRequests: number): number {
-  return (successfulRequests / 1000) * pricing.cpmUsd;
-}
-
-function estimateMonthlyCost(successfulRequests: number): number {
-  const billableOverage = Math.max(0, successfulRequests - pricing.includedRequests);
-  const usageCost = (billableOverage / 1000) * pricing.cpmUsd;
-  return pricing.monthlyCommitmentUsd + usageCost;
-}
-
-interface OfficialChannelUsage {
-  channel: string;
-  requests: number;
-  estimatedCostUsd: number;
-}
-
-interface OfficialUsage {
-  byChannel: OfficialChannelUsage[];
-  totalRequests: number;
-  estimatedCostUsd: number;
-}
-
-// Bright Data /domains/req 도메인 → 내부 채널. 네이버는 두 도메인으로 쪼개져 합산 필요.
-function domainToChannel(domain: string): string | null {
-  switch (domain) {
-    case 'coupang.com':
-      return 'coupang';
-    case 'danawa.com':
-      return 'danawa';
-    case 'naver.com':
-    case 'search.shopping.naver.com':
-      return 'naver';
-    default:
-      return null;
-  }
-}
-
-/**
- * Bright Data 공식 과금 요청 수(/domains/req)를 신뢰 소스로 조회.
- * 로컬 usage_logs의 success(res.ok)는 빈 응답·차단 페이지(200 OK)까지 포함해 실제 과금보다 과다하므로,
- * 비용 표시는 공식 API 값을 우선한다. 실패 시 null → 상위에서 로컬 폴백.
- *
- * from/to는 UTC 날짜 버킷(Bright Data req 스펙)이라 KST 월경계와 미세한 차이가 있으나 근사 허용.
- */
-async function fetchOfficialUsage(): Promise<OfficialUsage | null> {
-  const token = process.env.BRIGHTDATA_API_TOKEN;
-  const zone = process.env.BRIGHTDATA_ZONE;
-  if (!token || !zone) return null;
-
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(now.getUTCDate()).padStart(2, '0');
-  const from = `${yyyy}-${mm}-01`;
-  const to = `${yyyy}-${mm}-${dd}`;
-
-  try {
-    const res = await fetch(
-      `https://api.brightdata.com/domains/req?from=${from}&to=${to}&zones=${encodeURIComponent(zone)}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(20_000),
-        cache: 'no-store',
-      }
-    );
-    if (!res.ok) {
-      console.warn(`[api/brightdata/usage] official req ${res.status}`);
-      return null;
-    }
-
-    const parsed = (await res.json()) as unknown;
-    // { <zone>: { <dateIso>: { <domain>: count } } }
-    const perChannel = new Map<string, number>();
-    const root = (parsed ?? {}) as Record<string, unknown>;
-    for (const zoneVal of Object.values(root)) {
-      if (!zoneVal || typeof zoneVal !== 'object') continue;
-      for (const dateVal of Object.values(zoneVal as Record<string, unknown>)) {
-        if (!dateVal || typeof dateVal !== 'object') continue;
-        for (const [domain, count] of Object.entries(dateVal as Record<string, unknown>)) {
-          const channel = domainToChannel(domain);
-          if (!channel) continue;
-          const n = typeof count === 'number' ? count : 0;
-          perChannel.set(channel, (perChannel.get(channel) ?? 0) + n);
-        }
-      }
-    }
-
-    const byChannel: OfficialChannelUsage[] = Array.from(perChannel.entries())
-      .map(([channel, requests]) => ({
-        channel,
-        requests,
-        estimatedCostUsd: (requests / 1000) * pricing.cpmUsd,
-      }))
-      .sort((a, b) => b.requests - a.requests);
-    const totalRequests = byChannel.reduce((sum, c) => sum + c.requests, 0);
-    const estimatedCostUsd = (totalRequests / 1000) * pricing.cpmUsd;
-
-    return { byChannel, totalRequests, estimatedCostUsd };
-  } catch (err) {
-    console.warn('[api/brightdata/usage] official fetch failed', err);
-    return null;
-  }
-}
+// 과금 계산·공식 사용량 조회는 예산 가드(scripts/prepare-collect.ts)와 공유 — src/lib/brightdata-billing.ts
+const pricing = getBrightdataPricing();
 
 // 외부 API 부담·레이트리밋 완화를 위한 모듈 레벨 캐시 (TTL 5분).
 let officialCache: { data: OfficialUsage | null; at: number } | null = null;
@@ -225,29 +113,14 @@ async function getMonthRows(monthStartUtc: Date): Promise<UsageRow[]> {
 export async function GET() {
   try {
     const now = new Date();
-
-    // KST 자정 기준
-    const kstOffsetMs = 9 * 60 * 60 * 1000;
-    const kstNow = new Date(now.getTime() + kstOffsetMs);
-    const kstTodayStart = new Date(
-      Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), kstNow.getUTCDate())
-    );
-    const todayStartUtc = new Date(kstTodayStart.getTime() - kstOffsetMs);
-    const monthStartKst = new Date(
-      Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth(), 1)
-    );
-    const monthStartUtc = new Date(monthStartKst.getTime() - kstOffsetMs);
-    const nextMonthStartKst = new Date(
-      Date.UTC(kstNow.getUTCFullYear(), kstNow.getUTCMonth() + 1, 1)
-    );
-    const nextMonthStartUtc = new Date(nextMonthStartKst.getTime() - kstOffsetMs);
+    const { todayStartUtc, monthStartUtc, nextMonthStartUtc } = kstMonthBoundaries(now);
 
     const rows = await getMonthRows(monthStartUtc);
     const todayRows = rows.filter((r) => new Date(r.created_at) >= todayStartUtc);
 
     const today = summarize(todayRows);
     const month = summarize(rows);
-    month.estimatedCostUsd = estimateMonthlyCost(month.success);
+    month.estimatedCostUsd = estimateMonthlyCost(month.success, pricing);
     const elapsedMonthMs = Math.max(1, now.getTime() - monthStartUtc.getTime());
     const totalMonthMs = Math.max(
       elapsedMonthMs,
@@ -263,7 +136,7 @@ export async function GET() {
       success: projectedSuccessfulRequests,
       failed: elapsedMonthRatio > 0 ? Math.round(month.failed / elapsedMonthRatio) : month.failed,
       bytes: projectedBytes,
-      estimatedCostUsd: estimateMonthlyCost(projectedSuccessfulRequests),
+      estimatedCostUsd: estimateMonthlyCost(projectedSuccessfulRequests, pricing),
       elapsedMonthRatio,
       periodStart: monthStartUtc.toISOString(),
       periodEnd: nextMonthStartUtc.toISOString(),
@@ -284,9 +157,7 @@ export async function GET() {
     // 일별 추이 (최근 14일)
     const dailyMap = new Map<string, UsageRow[]>();
     for (const r of rows) {
-      const kstDate = new Date(new Date(r.created_at).getTime() + kstOffsetMs)
-        .toISOString()
-        .split('T')[0];
+      const kstDate = dateKeyKST(r.created_at);
       const list = dailyMap.get(kstDate) ?? [];
       list.push(r);
       dailyMap.set(kstDate, list);

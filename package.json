@@ -9,6 +9,8 @@
     "lint": "eslint",
     "collect": "tsx --env-file=.env.local scripts/collect.ts",
     "collect:ci": "tsx scripts/collect.ts",
+    "maintenance": "tsx --env-file=.env.local scripts/maintenance.ts",
+    "maintenance:ci": "tsx scripts/maintenance.ts",
     "usage-report": "tsx --env-file=.env.local scripts/usage-report.ts"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 import { normalizeBrand } from '@/lib/brand-utils';
+import { selectAllRange } from '@/lib/query-chunk';
 
 interface CheckItem {
   rowIndex: number;
@@ -71,11 +72,29 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = createServiceClient();
-    const { data: existing, error } = await supabase
-      .from('products')
-      .select('id, name, sabangnet_code, coupang_url, naver_url, danawa_url');
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    // 상품이 Supabase 기본 행 상한(1,000)을 넘으면 단건 select는 조용히 잘려
+    // 중복 검사가 뚫린다 → range 루프로 전수 조회
+    type ExistingProduct = {
+      id: string;
+      name: string;
+      sabangnet_code: string | null;
+      coupang_url: string | null;
+      naver_url: string | null;
+      danawa_url: string | null;
+    };
+    let existing: ExistingProduct[];
+    try {
+      existing = await selectAllRange<ExistingProduct>((from, to) =>
+        supabase
+          .from('products')
+          .select('id, name, sabangnet_code, coupang_url, naver_url, danawa_url')
+          .order('id')
+          .range(from, to)
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '상품 조회 실패';
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
     const { data: existingBrands } = await supabase.from('brands').select('id, name');
     const brandKeyMap = new Map<string, { id: string; name: string }>();
@@ -93,9 +112,9 @@ export async function POST(request: NextRequest) {
     const nameIndex = new Map<string, { id: string; name: string }>();
     const sabangnetIndex = new Map<string, { id: string; name: string }>();
 
-    for (const p of existing ?? []) {
-      const pid = p.id as string;
-      const pname = p.name as string;
+    for (const p of existing) {
+      const pid = p.id;
+      const pname = p.name;
       if (p.coupang_url) {
         urlIndex.set(p.coupang_url as string, { id: pid, name: pname, field: 'coupang_url' });
       }

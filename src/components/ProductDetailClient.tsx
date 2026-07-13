@@ -608,6 +608,12 @@ export default function ProductDetailClient({
             )}
 
             <div className="p-4">
+              {!loading && data.some((l) => l.source === 'daily') && (
+                <p className="mb-2 text-[11px] text-gray-500">
+                  ℹ 6개월 이전 구간은 일별 최저가 요약 데이터입니다 (원본 로그는 최근
+                  6개월만 보관).
+                </p>
+              )}
               {loading ? (
                 <ChartSkeleton height={400} />
               ) : (

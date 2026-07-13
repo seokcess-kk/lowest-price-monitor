@@ -1,14 +1,13 @@
 'use client';
 
-import type { PriceWithChange } from '@/types/database';
-import { computeSummary } from '@/lib/price-utils';
+import type { SummaryStats } from '@/types/database';
 
 interface SummaryCardsProps {
-  data: PriceWithChange[];
+  /** 서버(api/dashboard)가 전체 필터셋 기준으로 집계한 값 — 페이지 슬라이스 아님 */
+  stats: SummaryStats;
 }
 
-export default function SummaryCards({ data }: SummaryCardsProps) {
-  const stats = computeSummary(data);
+export default function SummaryCards({ stats }: SummaryCardsProps) {
   const avg = stats.averageChangePct;
   const avgColor =
     avg === null
