@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase';
 import { dateKeyKST, daysAgoKeyKST } from '@/lib/date-utils';
+import { refreshPriceDailyRange } from '@/lib/price-daily';
 
 /**
  * 가격 이력 이상치 자동 마킹 트리거.
@@ -33,13 +34,17 @@ export async function POST(request: NextRequest) {
     }
 
     // 마킹 윈도우만큼 일별 요약을 재계산 — is_suspicious 플립이 price_daily에 반영되도록.
+    // 긴 범위 단일 호출은 statement timeout에 걸리므로 날짜 청크로 분할.
     // 요약 갱신 실패는 마킹 자체를 되돌리지 않으므로 경고만.
-    const { error: refreshErr } = await supabase.rpc('refresh_price_daily', {
-      p_from: daysAgoKeyKST(windowDays),
-      p_to: dateKeyKST(),
-    });
-    if (refreshErr) {
-      console.warn(`[api/maintenance/mark-outliers] price_daily 갱신 skip: ${refreshErr.message}`);
+    const { errors: refreshErrors } = await refreshPriceDailyRange(
+      supabase,
+      daysAgoKeyKST(windowDays),
+      dateKeyKST()
+    );
+    if (refreshErrors.length > 0) {
+      console.warn(
+        `[api/maintenance/mark-outliers] price_daily 갱신 일부 skip: ${refreshErrors.join('; ')}`
+      );
     }
 
     return NextResponse.json({

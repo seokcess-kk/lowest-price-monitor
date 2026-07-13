@@ -1,6 +1,7 @@
 import { collectAll } from '../src/scraper';
 import { createServiceClient } from '../src/lib/supabase';
 import { dateKeyKST, daysAgoKeyKST } from '../src/lib/date-utils';
+import { refreshPriceDailyRange } from '../src/lib/price-daily';
 
 /**
  * 가격 수집 스크립트 (GitHub Actions 샤드 1개 = 이 스크립트 1회 실행).
@@ -178,13 +179,14 @@ async function main(): Promise<void> {
         } else {
           console.log(`[mark_outliers] ${flagged ?? 0}건 의심 마킹`);
           // 이상치 마킹이 과거 30일 로그의 is_suspicious를 플립하므로
-          // 같은 윈도우의 일별 요약을 재계산해 반영한다.
-          const { error: refreshErr } = await sb.rpc('refresh_price_daily', {
-            p_from: daysAgoKeyKST(30),
-            p_to: dateKeyKST(),
-          });
-          if (refreshErr) {
-            console.warn(`[refresh_price_daily] skip: ${refreshErr.message}`);
+          // 같은 윈도우의 일별 요약을 재계산해 반영한다 (timeout 방지 위해 날짜 청크).
+          const { errors: refreshErrors } = await refreshPriceDailyRange(
+            sb,
+            daysAgoKeyKST(30),
+            dateKeyKST()
+          );
+          if (refreshErrors.length > 0) {
+            console.warn(`[refresh_price_daily] 일부 skip: ${refreshErrors.join('; ')}`);
           }
         }
       } catch (e) {

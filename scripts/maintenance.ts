@@ -1,5 +1,6 @@
 import { createServiceClient } from '../src/lib/supabase';
 import { dateKeyKST, daysAgoKeyKST } from '../src/lib/date-utils';
+import { refreshPriceDailyRange } from '../src/lib/price-daily';
 
 /**
  * 일일 유지보수 (maintenance.yml 크론 → npm run maintenance:ci).
@@ -17,16 +18,17 @@ const MAX_PURGE_ITERATIONS = 100;
 async function main(): Promise<void> {
   const supabase = createServiceClient();
 
-  // 1) 요약 대사
-  const { data: refreshed, error: refreshErr } = await supabase.rpc('refresh_price_daily', {
-    p_from: daysAgoKeyKST(RECONCILE_DAYS),
-    p_to: dateKeyKST(),
-  });
-  if (refreshErr) {
-    console.error(`[maintenance] refresh_price_daily 실패: ${refreshErr.message}`);
+  // 1) 요약 대사 — 긴 범위 단일 호출은 statement timeout에 걸리므로 날짜 청크로 분할
+  const { refreshed, errors: refreshErrors } = await refreshPriceDailyRange(
+    supabase,
+    daysAgoKeyKST(RECONCILE_DAYS),
+    dateKeyKST()
+  );
+  if (refreshErrors.length > 0) {
+    console.error(`[maintenance] refresh_price_daily 실패:\n  ${refreshErrors.join('\n  ')}`);
     process.exit(1);
   }
-  console.log(`[maintenance] 일별 요약 대사 완료 — ${refreshed ?? 0}행 upsert/삭제`);
+  console.log(`[maintenance] 일별 요약 대사 완료 — ${refreshed}행 upsert/삭제`);
 
   // 2) 보존 정책 — 배치 반복
   const totals: Record<string, number> = {};
