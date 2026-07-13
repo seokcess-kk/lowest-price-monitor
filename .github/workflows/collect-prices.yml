@@ -97,5 +97,9 @@ jobs:
           COLLECT_PRODUCT_ID: ${{ github.event.inputs.product_id }}
           COLLECT_TRIGGER_SOURCE: ${{ needs.prepare.outputs.trigger_source }}
           COLLECT_BUDGET_MODE: ${{ needs.prepare.outputs.budget_mode }}
+          # 상품 단위 동시 처리 수 — repo variable로 재배포 없이 조정. 미설정 시 코드 기본값과 같은 2.
+          # zone 동시 in-flight = 샤드 수 × 이 값 × 3채널이므로, 올린 뒤 brightdata_usage_logs의
+          # p95·빈 응답 비율을 확인하며 단계적으로 조정할 것.
+          COLLECT_PRODUCT_CONCURRENCY: ${{ vars.COLLECT_PRODUCT_CONCURRENCY || '2' }}
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_TOTAL: ${{ needs.prepare.outputs.shard_total }}

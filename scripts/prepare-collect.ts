@@ -15,15 +15,21 @@ import {
  * collect job(matrix 샤드)이 뜨기 전에 한 번만 실행되어:
  *  1. collect_requests row 확보 — 크론이면 새로 생성(trigger_source='cron'),
  *     대시보드 dispatch(request_id)면 기존 row 로드
- *  2. 대상 상품 수 기준으로 샤드 수 산정: clamp(ceil(대상/625), 1, 8)
- *     (샤드당 625개 = 상품당 평균 57초 × 동시성 2로 약 5시간 — 6h job 한도 내)
+ *  2. 대상 상품 수 기준으로 샤드 수 산정: clamp(ceil(대상/300), 1, 8)
+ *     (샤드당 300개 = 상품당 평균 57초 × 동시성 2 기준 약 2.4시간.
+ *      2,400개 초과 규모는 MAX_SHARDS 클램프로 샤드당 수가 다시 늘어나며,
+ *      5,000개 = 샤드당 625개 ≈ 5시간으로 기존 6h 한도 검증 범위 안)
  *  3. 월 예산 가드 판정 (hard cap → run 전체 skip / soft cap → 등급 주기 완화)
  *
  * GitHub outputs: request_id / shard_total / shard_json / skip / budget_mode / trigger_source
  */
 
-/** 샤드 1개가 6시간 한도 내에 안전하게 처리할 수 있는 상품 수 (전량 수집일 기준) */
-const TARGET_PER_SHARD = 625;
+/**
+ * 샤드 1개에 배정하는 목표 상품 수 (전량 수집일 기준).
+ * 벽시계 단축을 위해 625→300. 6h 한도 관점의 최악 케이스는 MAX_SHARDS 클램프가
+ * 걸리는 5,000개 규모(샤드당 625개 ≈ 5시간)로, 하향 전과 동일하다.
+ */
+const TARGET_PER_SHARD = 300;
 const MAX_SHARDS = 8;
 
 function setOutput(key: string, value: string): void {
