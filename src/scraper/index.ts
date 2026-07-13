@@ -44,6 +44,14 @@ const PRODUCT_CONCURRENCY = Math.max(
 const FAILURE_BACKOFF_THRESHOLD = 3;
 const FAILURE_BACKOFF_LOOKBACK_DAYS = 30;
 const FAILURE_BACKOFF_MAX_DAYS = 3;
+/**
+ * zone 장애 창(전 채널 200+빈 본문) 판정 파라미터 — 시간 버킷 내 최소 호출 수 / 빈 응답 비율.
+ * 이 창의 실패는 상품·URL 문제가 아니므로 백오프 카운트에서 제외한다 (2026-07-11~13 실측:
+ * 장애 시간대 빈 응답 비율 99%+, 정상 시간대 최대 ~61% — 쿠팡 상시 빈 응답이 섞여도 못 미침).
+ */
+const OUTAGE_MIN_CALLS = 20;
+const OUTAGE_ZERO_SHARE = 0.9;
+const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** 이 기간(일) 내 정상 가격이 전혀 변하지 않았으면 "무변동"으로 보고 저빈도 수집으로 전환한다. */
 const STABLE_WINDOW_DAYS = 14;
@@ -283,6 +291,39 @@ async function getRecentFailureRows(
   );
 }
 
+/**
+ * Web Unlocker zone 장애(전 채널 200+빈 본문) 시간 창 조회 — 시간 버킷 시작 epoch(ms) Set.
+ * 이 창에서 기록된 scrape_errors는 zone 과금/한도 문제이지 상품 문제가 아니므로
+ * 연속 실패 백오프에서 세지 않는다 — 세면 zone 복구 후에도 1~3일 수집 공백이 생긴다.
+ * RPC 미적용/실패 환경에서는 빈 Set 반환 → 기존 동작(전부 카운트) 폴백.
+ */
+async function getZoneOutageBuckets(
+  supabase: ReturnType<typeof createServiceClient>,
+  sinceIso: string
+): Promise<Set<number>> {
+  const buckets = new Set<number>();
+  try {
+    const { data, error } = await supabase.rpc('zone_outage_windows', {
+      p_since: sinceIso,
+      p_min_calls: OUTAGE_MIN_CALLS,
+      p_zero_share: OUTAGE_ZERO_SHARE,
+    });
+    if (error) {
+      console.warn(
+        `[collectAll] zone_outage_windows RPC 실패 — 장애 창 제외 생략: ${error.message}`
+      );
+      return buckets;
+    }
+    for (const row of (data ?? []) as Array<{ bucket_start: string }>) {
+      const t = Date.parse(row.bucket_start);
+      if (Number.isFinite(t)) buckets.add(t);
+    }
+  } catch (e) {
+    console.warn('[collectAll] zone_outage_windows 조회 예외 — 장애 창 제외 생략:', e);
+  }
+  return buckets;
+}
+
 async function buildFailureBackoffMap(
   supabase: ReturnType<typeof createServiceClient>,
   products: Product[]
@@ -294,7 +335,7 @@ async function buildFailureBackoffMap(
     Date.now() - FAILURE_BACKOFF_LOOKBACK_DAYS * DAY_MS
   ).toISOString();
 
-  const [failureRows, successRows] = await Promise.all([
+  const [failureRows, successRows, outageBuckets] = await Promise.all([
     getRecentFailureRows(supabase, productIds, sinceIso),
     selectByIdChunks<{ product_id: string; channel: Channel; collected_at: string }>(
       productIds,
@@ -307,6 +348,7 @@ async function buildFailureBackoffMap(
           .order('collected_at', { ascending: false })
           .range(from, to)
     ),
+    getZoneOutageBuckets(supabase, sinceIso),
   ]);
 
   const lastSuccessTime = new Map<string, number>();
@@ -317,15 +359,27 @@ async function buildFailureBackoffMap(
     if (Number.isFinite(t) && t > prev) lastSuccessTime.set(key, t);
   }
 
+  let outageExcluded = 0;
   const groupedFailures = new Map<string, string[]>();
   for (const row of failureRows) {
     const key = productChannelKey(row.product_id, row.channel);
     const failureTime = new Date(row.created_at).getTime();
     const successTime = lastSuccessTime.get(key) ?? 0;
     if (!Number.isFinite(failureTime) || failureTime <= successTime) continue;
+    // zone 장애 창의 실패는 상품 문제가 아니다 — 백오프 카운트에서 제외
+    if (outageBuckets.has(Math.floor(failureTime / HOUR_MS) * HOUR_MS)) {
+      outageExcluded++;
+      continue;
+    }
     const arr = groupedFailures.get(key);
     if (arr) arr.push(row.created_at);
     else groupedFailures.set(key, [row.created_at]);
+  }
+  if (outageExcluded > 0) {
+    console.log(
+      `[collectAll] zone 장애 창 실패 ${outageExcluded}건은 백오프 카운트에서 제외 ` +
+        `(장애 창 ${outageBuckets.size}개 시간 버킷)`
+    );
   }
 
   const now = Date.now();
