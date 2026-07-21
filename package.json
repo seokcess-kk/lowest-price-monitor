@@ -11,7 +11,8 @@
     "collect:ci": "tsx scripts/collect.ts",
     "maintenance": "tsx --env-file=.env.local scripts/maintenance.ts",
     "maintenance:ci": "tsx scripts/maintenance.ts",
-    "usage-report": "tsx --env-file=.env.local scripts/usage-report.ts"
+    "usage-report": "tsx --env-file=.env.local scripts/usage-report.ts",
+    "diagnose-billing": "tsx --env-file=.env.local scripts/diagnose-billing.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
