@@ -3,7 +3,12 @@ import { createServiceClient } from '@/lib/supabase';
 import { cleanupStaleRequests } from '@/lib/collect-cleanup';
 import { dateKeyKST, daysAgoKeyKST } from '@/lib/date-utils';
 import { delay } from './utils';
-import { flushUsage } from './brightdata';
+import {
+  flushUsage,
+  resetCircuitBreakers,
+  isCircuitTripped,
+  trippedChannels,
+} from './brightdata';
 import { selectAllRange, selectByIdChunks } from '@/lib/query-chunk';
 import { scrapeCoupang } from './channels/coupang';
 import { scrapeNaver } from './channels/naver';
@@ -14,13 +19,26 @@ interface ScrapeResult {
   storeName: string | null;
 }
 
-type Scraper = (url: string, productName?: string) => Promise<ScrapeResult | null>;
+/** hints: 채널별 선택적 수집 파라미터 (현재 쿠팡 재시도 상한만 사용). */
+type Scraper = (
+  url: string,
+  productName?: string,
+  hints?: { maxAttempts?: number }
+) => Promise<ScrapeResult | null>;
 
 const CHANNEL_SCRAPERS: Record<Channel, Scraper> = {
-  coupang: (url) => scrapeCoupang(url),
+  coupang: (url, _productName, hints) => scrapeCoupang(url, hints),
   naver: (url, productName) => scrapeNaver(url, productName),
   danawa: (url) => scrapeDanawa(url),
 };
+
+/**
+ * 쿠팡 재시도 상한을 등급별로 차등한다 — 안정(WARM/COLD) 상품은 특가 감시 우선순위가 낮아
+ * 재시도를 아껴 과금을 줄인다. HOT·등급 미상은 기본(3)으로 신선도 우선.
+ */
+function coupangAttempts(tier: Tier | undefined): number {
+  return tier === 'warm' || tier === 'cold' ? 2 : 3;
+}
 
 /** baseline(dominantPrice) 대비 ±50% 이상 벗어나면 1차 의심 */
 const SUSPICIOUS_THRESHOLD = 0.5;
@@ -441,6 +459,8 @@ export async function collectAll(
   const deadlineMs = options?.deadlineMs;
   // 저빈도 차등은 크론 전역 수집에만 적용 — 즉시 수집(버튼)·상품 지정 수집은 신선도 우선으로 항상 매일 수집
   const applyLowFreqGate = !isManual && !(productIds && productIds.length > 0);
+  // zone 장애 서킷브레이커는 실행 단위 상태 — 이전 실행의 트립이 새지 않도록 시작 시 리셋.
+  resetCircuitBreakers();
   const supabase = createServiceClient();
   const results: CollectResult[] = [];
   const errors: string[] = [];
@@ -680,11 +700,15 @@ export async function collectAll(
   // 저빈도 차등으로 이번 실행에서 skip한 채널 호출 수 (병렬 워커 공유 카운터, 단순 증가라 락 불필요)
   let lowFreqSkipCount = 0;
   const tierSkipCounts: Record<Tier, number> = { hot: 0, warm: 0, cold: 0 };
+  // zone 장애 서킷브레이커로 이번 실행에서 차단돼 호출 자체를 건너뛴 (상품×채널) 수
+  let circuitSkipCount = 0;
 
   const processProduct = async (product: Product): Promise<void> => {
     // 이 상품 분만 누적 — 3채널이 끝나면 즉시 DB에 기록한다.
     const productPriceRows: PriceRow[] = [];
     const productErrorRows: ErrorRow[] = [];
+    // 채널별 등급 — 쿠팡 재시도 상한 차등에 재활용 (저빈도 필터 중 계산한 값을 버리지 않고 보관)
+    const channelTier = new Map<Channel, Tier>();
     // URL이 존재하는 채널만 수집 task를 만든다. URL 없는 채널은 Bright Data 호출 대상이 아니다.
     let activeChannels = channels.filter((channel) => !!getChannelUrl(product, channel));
     // 크론 전역 수집에서만: 오래 무변동인 (상품×채널)을 저빈도 주기로 낮춰 Bright Data 호출 자체를 아낀다.
@@ -695,6 +719,7 @@ export async function collectAll(
         if (tierStatsMap) {
           // 3단계 등급제 (HOT 매일 / WARM 2일 / COLD 주 1회)
           const decision = decideTier(tierStatsMap.get(key), now, tierIntervalScale);
+          channelTier.set(channel, decision.tier);
           if (!decision.skip) return true;
           tierSkipCounts[decision.tier]++;
           console.log(
@@ -715,6 +740,13 @@ export async function collectAll(
         return false;
       });
     }
+    // zone 장애로 차단된 채널은 이번 실행 동안 호출 자체를 건너뛴다(모든 수집 모드 공통) —
+    // 데이터 없이 과금되는 헛호출을 막는다. callWebUnlocker의 단락과 이중으로 안전하게.
+    activeChannels = activeChannels.filter((channel) => {
+      if (!isCircuitTripped(channel)) return true;
+      circuitSkipCount++;
+      return false;
+    });
     // 한 상품의 채널들은 서로 다른 호스트이므로 동시에 호출
     const channelTasks = activeChannels.map(async (channel): Promise<CollectResult> => {
       const url = getChannelUrl(product, channel);
@@ -739,7 +771,11 @@ export async function collectAll(
       try {
         console.log(`[${channel}] ${product.name} 수집 중...`);
         const scraper = CHANNEL_SCRAPERS[channel];
-        const firstScrape = await scraper(url, product.name);
+        const hints =
+          channel === 'coupang'
+            ? { maxAttempts: coupangAttempts(channelTier.get('coupang')) }
+            : undefined;
+        const firstScrape = await scraper(url, product.name, hints);
 
         if (firstScrape) {
           const baseline = baselineMap.get(`${product.id}:${channel}`);
@@ -747,7 +783,25 @@ export async function collectAll(
           let finalStore = firstScrape.storeName;
           let suspicious = false;
 
-          if (isOutOfRange(baseline, firstScrape.price)) {
+          // 쿠팡의 "비싼 쪽 이상치"는 재수집을 생략한다 — 어차피 최저가 후보가 아니라
+          // 대시보드 최저가 감시에 영향이 없는데도 재수집으로 호출을 2배로 쓰기 때문.
+          // 최저가 후보(baseline보다 싼 이상치)만 재수집으로 검증한다. 다른 채널은 기존대로 검증.
+          const skipRescan =
+            channel === 'coupang' &&
+            baseline !== undefined &&
+            firstScrape.price > baseline;
+
+          if (skipRescan && isOutOfRange(baseline, firstScrape.price)) {
+            // 재수집 없이 의심 기록 — baseline 오염은 is_suspicious=false만 baseline에 쓰므로 방지된다.
+            suspicious = true;
+            const ratioPct = baseline
+              ? (((firstScrape.price - baseline) / baseline) * 100).toFixed(1)
+              : 'n/a';
+            console.warn(
+              `[collectAll] 쿠팡 고가 이상치 재수집 생략 [${channel}] ${product.name}: ` +
+                `baseline=${baseline} → ${firstScrape.price} (${ratioPct}%) — is_suspicious=true`
+            );
+          } else if (isOutOfRange(baseline, firstScrape.price)) {
             // baseline 대비 ±50% 벗어남 — 1회 재수집으로 가격대 회복 여부 확인.
             //
             // 이전 정책은 "1차/2차 ±10% 일치 = 확증"으로 받아들였지만,
@@ -928,6 +982,15 @@ export async function collectAll(
 
   const success = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
+
+  // zone 장애 서킷브레이커가 이번 실행에서 어떤 채널을 차단했는지 — 과금 누수 조기 차단 관측.
+  const tripped = trippedChannels();
+  if (tripped.length > 0) {
+    console.warn(
+      `[collectAll] zone 장애 서킷브레이커 발동: 차단 채널 [${tripped.join(', ')}], ` +
+        `호출 건너뛴 (상품×채널) ${circuitSkipCount}개 — 헛과금 방지`
+    );
+  }
 
   if (applyLowFreqGate) {
     const totalChannelCalls = filteredProducts.reduce(

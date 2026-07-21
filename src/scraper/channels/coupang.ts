@@ -21,7 +21,11 @@ export interface ScrapeResult {
  *   - 60초 타임아웃이 예산을 빠르게 소진하면 일찍 포기 → 워커가 한 상품에 과도하게 묶이지 않음
  * 동시에 도는 다른 쿠팡 호출과 재시도 박자가 겹쳐 zone 큐에 몰리지 않도록 지터 백오프를 둔다.
  */
-const MAX_FETCH_ATTEMPTS = 5;
+/**
+ * 기본 재시도 상한. 빈 응답 35%를 독립사건으로 보면 3회로 성공률 ~96%를 유지하면서
+ * (5회는 ~99.5%) 장애 시 낭비 호출을 40% 줄인다. 상품 등급별로 collectAll이 opts로 조정한다.
+ */
+const DEFAULT_MAX_FETCH_ATTEMPTS = 3;
 /** 한 상품의 쿠팡 수집에 쓸 수 있는 총 시간(재시도 포함). 초과 시 더는 시도하지 않는다. */
 const TOTAL_FETCH_BUDGET_MS = 150_000;
 /** 한 번의 Web Unlocker 호출 상한 (정상 응답이 ~53초까지도 걸려 60초 유지). */
@@ -30,12 +34,16 @@ const RETRY_BACKOFF_BASE_MS = 1_000;
 const RETRY_BACKOFF_MAX_MS = 4_000;
 const MIN_HTML_BYTES = 5_000;
 
-export async function scrapeCoupang(url: string): Promise<ScrapeResult | null> {
+export async function scrapeCoupang(
+  url: string,
+  opts?: { maxAttempts?: number }
+): Promise<ScrapeResult | null> {
+  const maxAttempts = Math.max(1, opts?.maxAttempts ?? DEFAULT_MAX_FETCH_ATTEMPTS);
   let html = '';
   const startedAt = Date.now();
   let attempt = 0; // 실제 callWebUnlocker 호출 횟수
 
-  while (attempt < MAX_FETCH_ATTEMPTS) {
+  while (attempt < maxAttempts) {
     // 남은 예산이 한 번의 의미 있는 시도에도 못 미치면 중단.
     // (백오프보다 먼저 확인 — 어차피 호출하지 못할 시도의 백오프로 워커를 묶지 않도록)
     if (TOTAL_FETCH_BUDGET_MS - (Date.now() - startedAt) < 5_000) {
